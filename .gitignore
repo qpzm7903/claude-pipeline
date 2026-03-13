@@ -1,0 +1,25 @@
+# 敏感配置
+.env
+".env copy"
+
+# 运行时产物
+pipeline.db
+logs/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# Python 虚拟环境
+.venv/
+venv/
+
+# macOS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+
+# Docker 构建缓存
+*.tar

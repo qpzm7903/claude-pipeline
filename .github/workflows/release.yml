@@ -1,0 +1,100 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"   # 触发条件：推送 v1.0.0 格式的 tag
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write       # 创建 GitHub Release
+      packages: write       # 推送到 GHCR
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── 运行测试 ──────────────────────────────────────────────────
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies & run tests
+        run: |
+          pip install -r requirements.txt
+          python3 verify_local.py
+
+      # ── 构建并推送 Docker 镜像到 GHCR ────────────────────────────
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/agent
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest
+
+      - name: Build and push agent image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./agent
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+      # ── 打包源码产物 ──────────────────────────────────────────────
+      - name: Package source archive
+        run: |
+          TAG=${GITHUB_REF_NAME}
+          tar --exclude='.git' \
+              --exclude='.env' \
+              --exclude='logs' \
+              --exclude='pipeline.db' \
+              --exclude='__pycache__' \
+              -czf claude-pipeline-${TAG}-src.tar.gz \
+              orchestrator/ agent/ config/ \
+              requirements.txt verify_local.py \
+              docker-compose.yml .env.example README.md
+
+      # ── 创建 GitHub Release ───────────────────────────────────────
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            claude-pipeline-${{ github.ref_name }}-src.tar.gz
+          body: |
+            ## Docker Image
+
+            ```bash
+            # 拉取 Agent 镜像
+            docker pull ghcr.io/${{ github.repository }}/agent:${{ github.ref_name }}
+
+            # 或使用 latest
+            docker pull ghcr.io/${{ github.repository }}/agent:latest
+            ```
+
+            ## Quick Start
+
+            ```bash
+            cp .env.example .env
+            # 填入 ANTHROPIC_API_KEY 和 GIT_TOKEN
+
+            pip install -r requirements.txt
+            python3 -m orchestrator.main
+            ```

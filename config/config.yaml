@@ -1,0 +1,31 @@
+pipeline:
+  poll_interval_seconds: 300        # 每5分钟扫描一次
+  max_concurrent_containers: 3      # 最多同时运行3个任务容器
+  container_timeout_seconds: 3600   # 容器最长运行1小时
+  retry_failed_tasks: false         # Phase 1 暂不自动重试
+  log_dir: "./logs"
+
+docker:
+  image: "claude-pipeline-agent:latest"
+  mem_limit: "4g"
+  cpu_quota: 100000                 # 相当于1个CPU
+  network_mode: "bridge"
+  auto_remove: true
+
+anthropic:
+  # base_url: "https://api.anthropic.com"   # 留空则使用官方默认地址
+  # 也可通过环境变量 ANTHROPIC_BASE_URL 覆盖（优先级高于此处配置）
+  model: "claude-opus-4-5-20251001"
+  # model 也可通过环境变量 CLAUDE_MODEL 覆盖
+
+agent:
+  tdd_timeout: 600                  # TDD phase 超时（秒）
+  coding_timeout: 600               # Coding phase 超时（秒）
+  review_timeout: 300               # Review phase 超时（秒）
+  max_coding_retries: 3             # Coding Agent 最多重试3次
+
+git:
+  author_name: "Claude Pipeline Bot"
+  author_email: "pipeline@claude.ai"
+  branch_prefix: "task/"
+  commit_prefix: "feat"

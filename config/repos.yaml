@@ -1,0 +1,12 @@
+repos:
+  - name: "dailyLogger"
+    url: "https://github.com/qpzm7903/dailyLogger"
+    default_branch: "main"
+    task_source: "plan_md"
+    plan_file: "plan.md"
+    spec_dir: "specs"
+    test_command: "cargo test"
+    language: "rust"
+    labels:
+      - "claude-task"
+    enabled: true

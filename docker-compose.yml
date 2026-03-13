@@ -1,0 +1,38 @@
+version: "3.9"
+
+services:
+  orchestrator:
+    build:
+      context: .
+      dockerfile: orchestrator.Dockerfile
+    container_name: claude-pipeline-orchestrator
+    restart: unless-stopped
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - GIT_TOKEN=${GIT_TOKEN}
+      - GITHUB_TOKEN=${GITHUB_TOKEN:-}
+    volumes:
+      # 持久化数据库和日志
+      - ./pipeline.db:/app/pipeline.db
+      - ./logs:/app/logs
+      # 挂载配置目录（支持热更新）
+      - ./config:/app/config:ro
+      # 挂载 Docker socket（orchestrator 需要启动子容器）
+      - /var/run/docker.sock:/var/run/docker.sock
+    working_dir: /app
+    command: ["python", "-m", "orchestrator.main"]
+
+  # 本地开发时手动触发单个任务容器（示例）
+  # agent:
+  #   build:
+  #     context: ./agent
+  #     dockerfile: Dockerfile
+  #   environment:
+  #     - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+  #     - GIT_TOKEN=${GIT_TOKEN}
+  #     - TASK_JSON={"task_id":"test_001","title":"Test task",...}
+  #     - REPO_URL=https://github.com/owner/repo
+  #     - BRANCH_NAME=task/test_001
+  #     - TEST_COMMAND=pytest
+  #     - LANGUAGE=python
+  #   mem_limit: 4g
