@@ -19,7 +19,6 @@ log_error()   { echo -e "${RED}[ERROR]${NC} $*"; }
 log_section() { echo -e "\n${BLUE}════════════════════════════════════════\n  $*\n════════════════════════════════════════${NC}\n"; }
 
 WORKSPACE="/workspace"
-AGENT_TIMEOUT="${AGENT_TIMEOUT:-1800}"   # Claude 自主执行总超时 30 分钟
 
 log_section "Claude Pipeline Agent 启动"
 log_info "Task ID:  ${TASK_ID:-(none)}"
@@ -78,7 +77,7 @@ run_bmad_planning() {
 
 输出 BMAD_PLANNING_COMPLETE。"
 
-  timeout "${AGENT_TIMEOUT}" claude \
+  claude \
       --dangerously-skip-permissions --print --verbose \
       <<< "$PLANNING_PROMPT"
   [ $? -ne 0 ] && { log_error "BMAD 规划失败"; exit 2; }
@@ -103,7 +102,7 @@ run_bmad_create_story() {
 
 输出 BMAD_CREATE_STORY_COMPLETE。"
 
-  timeout "${AGENT_TIMEOUT}" claude \
+  claude \
       --dangerously-skip-permissions --print --verbose \
       <<< "$CREATE_STORY_PROMPT"
   [ $? -ne 0 ] && { log_error "create-story 失败"; exit 2; }
@@ -357,9 +356,9 @@ verdict 规则：有任何 high severity 问题则为 fail，否则为 pass。
 完成所有五步后，输出 PIPELINE_COMPLETE。"
 fi
 
-log_info "启动 Claude 自主执行（超时: ${AGENT_TIMEOUT}s）..."
+log_info "启动 Claude 自主执行..."
 
-timeout "${AGENT_TIMEOUT}" claude \
+claude \
         --dangerously-skip-permissions \
         --print \
         --verbose \
