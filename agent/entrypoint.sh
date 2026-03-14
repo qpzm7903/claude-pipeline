@@ -312,7 +312,7 @@ run_independent_review() {
 你是一名独立代码审查员，对实现过程一无所知，只看结果。
 
 ## 审查范围
-git diff origin/$(git symbolic-ref --short HEAD 2>/dev/null || echo main)...HEAD
+git diff ${BEFORE_IMPL_SHA:-HEAD~1}..HEAD
 
 ## 审查标准
 1. 正确性：是否正确实现需求（参考 story 文件或 plan.md）
@@ -717,6 +717,9 @@ if [ "$IS_BMAD" = "true" ] && [ -z "${STORY_KEY:-}" ]; then
 fi
 
 log_section "步骤 2: Claude 自主执行"
+
+# 记录实现前的 commit SHA，供独立审查使用（Claude push 后 origin/HEAD 会追上，必须提前捕获）
+BEFORE_IMPL_SHA=$(git rev-parse HEAD)
 
 if [ "$IS_BMAD" = "true" ]; then
   # ── BMAD 模式：只实施 story 内当前认领的单个 task ──────────────
