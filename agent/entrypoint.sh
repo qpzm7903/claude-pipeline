@@ -14,9 +14,8 @@ set -euo pipefail
 # ── 日志持久化：双写到 cargo-cache PVC，不用 tee 避免 SIGPIPE 杀死脚本 ──────
 _LOG_DIR="/home/pipeline/.cargo/registry/pipeline-logs"
 _LOG_FILE="/dev/null"
-# 确保目录可写（首次可能由 root 创建导致权限不足）
-sudo mkdir -p "${_LOG_DIR}" 2>/dev/null || mkdir -p "${_LOG_DIR}" 2>/dev/null || true
-sudo chown "$(id -u):$(id -g)" "${_LOG_DIR}" 2>/dev/null || true
+# pipeline-logs 目录需提前设为 1777（kubectl 一次性操作），此处仅创建（若不存在）
+mkdir -p "${_LOG_DIR}" 2>/dev/null || true
 if [ -d "${_LOG_DIR}" ] && [ -w "${_LOG_DIR}" ]; then
   _LOG_FILE="${_LOG_DIR}/$(date +%Y%m%d-%H%M%S)-$(hostname -s 2>/dev/null || echo pod).log"
   # 保留最近 30 个日志文件
