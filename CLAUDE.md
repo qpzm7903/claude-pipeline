@@ -26,6 +26,12 @@ ANTHROPIC_MODEL=qwen3.5-plus \
 docker build -t claude-pipeline-base:latest -f agent/Dockerfile.base ./agent/
 docker build -t claude-pipeline-agent:latest ./agent/
 
+# ⚠️  无 base 镜像时用 docker commit 打补丁（必须加 --change，否则 ENTRYPOINT/USER 丢失）
+# docker commit --change 'USER pipeline' \
+#               --change 'ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]' \
+#               --change 'CMD []' \
+#               <container_id> claude-pipeline-agent:latest
+
 # Lint the Dockerfile
 docker run --rm -i hadolint/hadolint < agent/Dockerfile
 
