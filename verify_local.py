@@ -134,10 +134,109 @@ def test_run_sh():
     return all_ok
 
 
+def test_k8s_manifests():
+    """验证 K8s 相关文件存在且包含必要内容。"""
+    print("\n" + "="*50)
+    print("测试 4: Kubernetes 清单文件验证")
+    print("="*50)
+
+    base = Path(__file__).parent
+    k8s_dir = base / "k8s"
+
+    if not k8s_dir.exists():
+        print("  ⏭️  k8s/ 目录不存在，跳过（Docker 模式不需要 K8s 文件）")
+        return True
+
+    # 检查必要文件存在
+    required_files = [
+        "namespace.yaml",
+        "rbac.yaml",
+        "cronjob-template.yaml",
+        "secret.yaml.example",
+        "render_and_apply.py",
+    ]
+    all_ok = True
+    for fname in required_files:
+        fpath = k8s_dir / fname
+        if fpath.exists():
+            print(f"  ✅ k8s/{fname}")
+        else:
+            print(f"  ❌ 缺少: k8s/{fname}")
+            all_ok = False
+
+    k8s_run = base / "k8s-run.sh"
+    if k8s_run.exists():
+        print(f"  ✅ k8s-run.sh")
+    else:
+        print(f"  ❌ 缺少: k8s-run.sh")
+        all_ok = False
+
+    # 检查模板占位符
+    template_path = k8s_dir / "cronjob-template.yaml"
+    if template_path.exists():
+        template = template_path.read_text()
+        placeholders = [
+            "{REPO_SLUG}", "{REPO_URL}", "{SCHEDULE}", "{IMAGE}",
+            "{IMAGE_PULL_POLICY}", "{MODEL}", "{ANTHROPIC_BASE_URL}",
+            "{GIT_AUTHOR_NAME}", "{GIT_AUTHOR_EMAIL}",
+        ]
+        for ph in placeholders:
+            if ph in template:
+                print(f"  ✅ 模板包含占位符 {ph}")
+            else:
+                print(f"  ❌ 模板缺少占位符 {ph}")
+                all_ok = False
+
+        # 检查关键字段
+        key_fields = [
+            ("concurrencyPolicy: Allow", "并发策略"),
+            ("backoffLimit: 0",          "失败不重试"),
+            ("restartPolicy: Never",     "不重启"),
+            ("activeDeadlineSeconds",    "超时设置"),
+            ("ANTHROPIC_AUTH_TOKEN",     "AUTH_TOKEN 兼容"),
+        ]
+        for keyword, desc in key_fields:
+            if keyword in template:
+                print(f"  ✅ 模板包含 {desc} ({keyword!r})")
+            else:
+                print(f"  ❌ 模板缺少 {desc} ({keyword!r})")
+                all_ok = False
+
+    # 检查 config.yaml 含 kubernetes: 段
+    cfg_path = base / "config" / "config.yaml"
+    if cfg_path.exists() and "kubernetes:" in cfg_path.read_text():
+        print("  ✅ config.yaml 包含 kubernetes: 段")
+    else:
+        print("  ❌ config.yaml 缺少 kubernetes: 段")
+        all_ok = False
+
+    # 安全检查：k8s/secret.yaml 不应被 git 追踪
+    secret_yaml = k8s_dir / "secret.yaml"
+    if secret_yaml.exists():
+        import subprocess
+        result = subprocess.run(
+            ["git", "ls-files", "--error-unmatch", str(secret_yaml)],
+            capture_output=True,
+            cwd=base,
+        )
+        if result.returncode == 0:
+            print("  ❌ 安全警告: k8s/secret.yaml 被 git 追踪！请加入 .gitignore")
+            all_ok = False
+        else:
+            print("  ✅ k8s/secret.yaml 未被 git 追踪（安全）")
+    else:
+        print("  ℹ️  k8s/secret.yaml 不存在（正常，由用户自行创建）")
+
+    if all_ok:
+        print("✅ K8s 清单文件验证通过！")
+    return all_ok
+
+
 def main():
     parser = argparse.ArgumentParser(description="Claude Pipeline 本地验证")
     parser.add_argument("--test-prompt", action="store_true", help="测试 entrypoint 工作流完整性")
     parser.add_argument("--test-config", action="store_true", help="验证 config.yaml 结构")
+    parser.add_argument("--test-k8s", action="store_true", help="验证 K8s 清单文件")
     args = parser.parse_args()
 
     results = []
@@ -146,10 +245,13 @@ def main():
         results.append(test_entrypoint_prompt())
     elif args.test_config:
         results.append(test_config())
+    elif args.test_k8s:
+        results.append(test_k8s_manifests())
     else:
         results.append(test_entrypoint_prompt())
         results.append(test_config())
         results.append(test_run_sh())
+        results.append(test_k8s_manifests())
 
     print("\n" + "="*50)
     passed = sum(results)

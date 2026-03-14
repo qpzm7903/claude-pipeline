@@ -1,10 +1,3 @@
-pipeline:
-  poll_interval_seconds: 300        # 每5分钟扫描一次
-  max_concurrent_containers: 3      # 最多同时运行3个任务容器
-  container_timeout_seconds: 3600   # 容器最长运行1小时
-  retry_failed_tasks: false         # Phase 1 暂不自动重试
-  log_dir: "./logs"
-
 docker:
   image: "claude-pipeline-agent:latest"
   mem_limit: "4g"
@@ -18,14 +11,13 @@ anthropic:
   model: "claude-opus-4-5-20251001"
   # model 也可通过环境变量 CLAUDE_MODEL 覆盖
 
-agent:
-  tdd_timeout: 600                  # TDD phase 超时（秒）
-  coding_timeout: 600               # Coding phase 超时（秒）
-  review_timeout: 300               # Review phase 超时（秒）
-  max_coding_retries: 3             # Coding Agent 最多重试3次
-
 git:
   author_name: "Claude Pipeline Bot"
   author_email: "pipeline@claude.ai"
   branch_prefix: "task/"
   commit_prefix: "feat"
+
+kubernetes:
+  schedule: "*/5 * * * *"       # CronJob 触发频率（默认每5分钟）
+  image_pull_policy: "Never"    # Never=本地镜像; IfNotPresent/Always=远端镜像
+  namespace: "claude-pipeline"

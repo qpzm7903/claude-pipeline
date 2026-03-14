@@ -1,0 +1,74 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: claude-pipeline-{REPO_SLUG}
+  namespace: claude-pipeline
+  labels:
+    app.kubernetes.io/name: claude-pipeline
+    app.kubernetes.io/component: agent
+    claude-pipeline/repo: "{REPO_SLUG}"
+spec:
+  schedule: "{SCHEDULE}"
+  concurrencyPolicy: Allow
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: 2400
+      template:
+        metadata:
+          labels:
+            claude-pipeline/repo: "{REPO_SLUG}"
+        spec:
+          serviceAccountName: claude-pipeline-agent
+          restartPolicy: Never
+          containers:
+            - name: agent
+              image: {IMAGE}
+              imagePullPolicy: {IMAGE_PULL_POLICY}
+              resources:
+                requests:
+                  memory: "1Gi"
+                  cpu: "500m"
+                limits:
+                  memory: "4Gi"
+                  cpu: "1000m"
+              env:
+                - name: REPO_URL
+                  value: "{REPO_URL}"
+                - name: ANTHROPIC_MODEL
+                  value: "{MODEL}"
+                - name: CLAUDE_MODEL
+                  value: "{MODEL}"
+                - name: ANTHROPIC_BASE_URL
+                  value: "{ANTHROPIC_BASE_URL}"
+                - name: GIT_AUTHOR_NAME
+                  value: "{GIT_AUTHOR_NAME}"
+                - name: GIT_AUTHOR_EMAIL
+                  value: "{GIT_AUTHOR_EMAIL}"
+                - name: ANTHROPIC_API_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: claude-pipeline-secrets
+                      key: ANTHROPIC_API_KEY
+                - name: ANTHROPIC_AUTH_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: claude-pipeline-secrets
+                      key: ANTHROPIC_API_KEY
+                - name: GIT_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: claude-pipeline-secrets
+                      key: GIT_TOKEN
+                - name: GITHUB_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: claude-pipeline-secrets
+                      key: GIT_TOKEN
+                - name: GH_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: claude-pipeline-secrets
+                      key: GIT_TOKEN

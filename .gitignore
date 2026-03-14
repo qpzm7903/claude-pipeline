@@ -23,3 +23,7 @@ venv/
 
 # Docker 构建缓存
 *.tar
+_bmad/
+
+# Kubernetes 机密（真实 secret 不提交）
+k8s/secret.yaml
