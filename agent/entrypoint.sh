@@ -13,15 +13,17 @@ set -euo pipefail
 
 # ── 日志持久化：同时 tee 到 cargo-cache PVC，防止 Docker GC 后日志丢失 ──────
 _LOG_DIR="/home/pipeline/.cargo/registry/pipeline-logs"
-# 确保目录存在且归 pipeline 用户所有（首次可能由 root 创建）
+# 确保目录可写（首次可能由 root 创建导致权限不足）
 sudo mkdir -p "${_LOG_DIR}" 2>/dev/null || mkdir -p "${_LOG_DIR}" 2>/dev/null || true
 sudo chown "$(id -u):$(id -g)" "${_LOG_DIR}" 2>/dev/null || true
-_LOG_FILE="${_LOG_DIR}/$(date +%Y%m%d-%H%M%S)-$(hostname -s 2>/dev/null || echo pod).log"
-# 将所有 stdout/stderr 同时写入日志文件（tee 保持终端彩色输出不变）
-exec > >(tee -a "${_LOG_FILE}") 2>&1
-# 保留最近 30 个日志文件，超出则删除最老的
-find "${_LOG_DIR}" -name "*.log" -printf '%T@ %p\n' 2>/dev/null \
-  | sort -n | head -n -30 | awk '{print $2}' | xargs rm -f 2>/dev/null || true
+# 测试可写性后再启用 tee，避免 tee 失败触发 SIGPIPE 导致脚本 5 秒内退出
+if [ -d "${_LOG_DIR}" ] && [ -w "${_LOG_DIR}" ]; then
+  _LOG_FILE="${_LOG_DIR}/$(date +%Y%m%d-%H%M%S)-$(hostname -s 2>/dev/null || echo pod).log"
+  exec > >(tee -a "${_LOG_FILE}") 2>&1
+  # 保留最近 30 个日志文件
+  find "${_LOG_DIR}" -name "*.log" -printf '%T@ %p\n' 2>/dev/null \
+    | sort -n | head -n -30 | awk '{print $2}' | xargs rm -f 2>/dev/null || true
+fi
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC='\033[0m'
 log_info()    { echo -e "${BLUE}[INFO]${NC}  $*"; }
