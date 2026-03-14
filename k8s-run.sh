@@ -5,6 +5,7 @@
 #   ./k8s-run.sh                                    # 为所有 enabled repo 创建/更新 CronJob
 #   ./k8s-run.sh https://github.com/user/repo       # 单个 repo
 #   ./k8s-run.sh --env .env.prod [repo_url]         # 指定 env 文件
+#   ./k8s-run.sh --update-secret                    # 用当前 .env 更新 K8s Secret
 #   ./k8s-run.sh --status                           # 查看 CronJob、Job、Pod 状态
 #   ./k8s-run.sh --delete                           # 删除所有 CronJob
 #   ./k8s-run.sh --logs                             # 查看最近 Pod 的日志
@@ -98,8 +99,31 @@ case "${1:-}" in
     kubectl logs -n "${NAMESPACE}" "${POD}" --tail=100
     ;;
 
+  --update-secret)
+    # 从已加载的 env 中读取 token，优先用 ANTHROPIC_AUTH_TOKEN
+    API_KEY="${ANTHROPIC_AUTH_TOKEN:-${ANTHROPIC_API_KEY:-}}"
+    GIT_TOK="${GIT_TOKEN:-${GITHUB_TOKEN:-}}"
+
+    if [ -z "${API_KEY}" ]; then
+      echo "❌ 未找到 ANTHROPIC_AUTH_TOKEN 或 ANTHROPIC_API_KEY"
+      exit 1
+    fi
+    if [ -z "${GIT_TOK}" ]; then
+      echo "❌ 未找到 GIT_TOKEN 或 GITHUB_TOKEN"
+      exit 1
+    fi
+
+    # 用 kubectl create secret --dry-run + apply 实现幂等更新
+    kubectl create secret generic claude-pipeline-secrets \
+      --namespace="${NAMESPACE}" \
+      --from-literal=ANTHROPIC_API_KEY="${API_KEY}" \
+      --from-literal=GIT_TOKEN="${GIT_TOK}" \
+      --dry-run=client -o yaml | kubectl apply -f -
+    echo "✅ Secret 已更新（ANTHROPIC_AUTH_TOKEN → ANTHROPIC_API_KEY）"
+    ;;
+
   --help|-h)
-    sed -n '2,17p' "${BASH_SOURCE[0]}" | sed 's/^# //' | sed 's/^#//'
+    sed -n '2,18p' "${BASH_SOURCE[0]}" | sed 's/^# //' | sed 's/^#//'
     ;;
 
   *)
