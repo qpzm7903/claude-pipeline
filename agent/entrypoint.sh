@@ -11,26 +11,25 @@
 
 set -euo pipefail
 
-# ── 日志持久化：同时 tee 到 cargo-cache PVC，防止 Docker GC 后日志丢失 ──────
+# ── 日志持久化：双写到 cargo-cache PVC，不用 tee 避免 SIGPIPE 杀死脚本 ──────
 _LOG_DIR="/home/pipeline/.cargo/registry/pipeline-logs"
+_LOG_FILE="/dev/null"
 # 确保目录可写（首次可能由 root 创建导致权限不足）
 sudo mkdir -p "${_LOG_DIR}" 2>/dev/null || mkdir -p "${_LOG_DIR}" 2>/dev/null || true
 sudo chown "$(id -u):$(id -g)" "${_LOG_DIR}" 2>/dev/null || true
-# 测试可写性后再启用 tee，避免 tee 失败触发 SIGPIPE 导致脚本 5 秒内退出
 if [ -d "${_LOG_DIR}" ] && [ -w "${_LOG_DIR}" ]; then
   _LOG_FILE="${_LOG_DIR}/$(date +%Y%m%d-%H%M%S)-$(hostname -s 2>/dev/null || echo pod).log"
-  exec > >(tee -a "${_LOG_FILE}") 2>&1
   # 保留最近 30 个日志文件
   find "${_LOG_DIR}" -name "*.log" -printf '%T@ %p\n' 2>/dev/null \
     | sort -n | head -n -30 | awk '{print $2}' | xargs rm -f 2>/dev/null || true
 fi
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC='\033[0m'
-log_info()    { echo -e "${BLUE}[INFO]${NC}  $*"; }
-log_success() { echo -e "${GREEN}[OK]${NC}    $*"; }
-log_warning() { echo -e "${YELLOW}[WARN]${NC}  $*"; }
-log_error()   { echo -e "${RED}[ERROR]${NC} $*"; }
-log_section() { echo -e "\n${BLUE}════════════════════════════════════════\n  $*\n════════════════════════════════════════${NC}\n"; }
+log_info()    { echo -e "${BLUE}[INFO]${NC}  $*";   echo "[INFO]    $*" >> "${_LOG_FILE}"; }
+log_success() { echo -e "${GREEN}[OK]${NC}    $*";  echo "[OK]      $*" >> "${_LOG_FILE}"; }
+log_warning() { echo -e "${YELLOW}[WARN]${NC}  $*"; echo "[WARN]    $*" >> "${_LOG_FILE}"; }
+log_error()   { echo -e "${RED}[ERROR]${NC} $*";   echo "[ERROR]   $*" >> "${_LOG_FILE}"; }
+log_section() { echo -e "\n${BLUE}════════════════════════════════════════\n  $*\n════════════════════════════════════════${NC}\n"; echo -e "\n=== $* ===" >> "${_LOG_FILE}"; }
 
 WORKSPACE="/workspace"
 
