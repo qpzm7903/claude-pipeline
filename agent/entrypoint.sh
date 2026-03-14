@@ -398,6 +398,58 @@ except: print('')
   done
 }
 
+# 等待 Tag 触发的 GitHub Actions workflow 完成（用 workflow_runs API，不是 check-runs）
+# check-runs API 对 tag push 触发的 release workflow 不可靠（常返回空 → 一直 pending）
+wait_for_tag_ci() {
+  local tag="$1"
+  local max_wait="${2:-300}"
+  local interval=20
+  local elapsed=0
+
+  log_section "等待 Release CI 完成 (tag: ${tag})"
+
+  # GitHub 注册 workflow run 需要约 10s
+  sleep 10; elapsed=10
+
+  while [ "$elapsed" -lt "$max_wait" ]; do
+    # gh run list 用 workflow_runs API，对 tag ref 更可靠
+    run_status=$(gh run list \
+      --repo "$(echo "$REPO_URL" | sed 's|.*github\.com/||;s|\.git$||')" \
+      --branch "${tag}" \
+      --limit 5 \
+      --json status,conclusion \
+      --jq '[.[] | {s:.status, c:.conclusion}]' 2>/dev/null || echo "[]")
+
+    total=$(echo "$run_status" | python3 -c "import json,sys; runs=json.load(sys.stdin); print(len(runs))" 2>/dev/null || echo "0")
+    if [ "$total" = "0" ]; then
+      if [ "$elapsed" -ge 60 ]; then
+        log_info "60s 内未发现 Release workflow run，跳过 CI 等待（该 repo 可能未配置 tag CI）"
+        return 0
+      fi
+    else
+      ci_result=$(echo "$run_status" | python3 -c "
+import json, sys
+runs = json.load(sys.stdin)
+if all(r['s'] == 'completed' for r in runs):
+    bad = [r for r in runs if r['c'] not in ('success','skipped','neutral')]
+    print('failure' if bad else 'success')
+else:
+    print('pending')
+" 2>/dev/null || echo "pending")
+      log_info "Release CI: ${ci_result} (${elapsed}s / ${max_wait}s, runs=${total})"
+      case "$ci_result" in
+        success) log_success "Release CI 全部通过"; return 0 ;;
+        failure) log_error "Release CI 失败"; return 1 ;;
+      esac
+    fi
+
+    sleep "$interval"; elapsed=$((elapsed + interval))
+  done
+
+  log_warning "Release CI 等待超时 (${max_wait}s)，继续流程（不视为失败）"
+  return 2  # 超时但不是失败（避免创建假 issue）
+}
+
 # 等待目标仓库 GitHub Actions 完成（check-runs API 比旧 /status 精确）
 wait_for_branch_ci() {
   local branch="$1"
@@ -523,6 +575,7 @@ if [ "$IS_BMAD" = "true" ]; then
 
   while [ "$BMAD_PHASE" != "done" ] && [ "$PHASE_COUNT" -lt "$MAX_PHASE_LOOPS" ]; do
     PHASE_COUNT=$((PHASE_COUNT + 1))
+    BMAD_PHASE_LAST="$BMAD_PHASE"
     log_info "BMAD 阶段循环 #${PHASE_COUNT}: ${BMAD_PHASE}"
 
     IMPL_DIR="./_bmad-output/implementation-artifacts"
@@ -722,9 +775,13 @@ fi
 
 # ── 步骤 2: Claude 自主执行 ──────────────────────────────────────
 
-# BMAD 模式下，若本次只做了 planning/create-story，没有认领 story，直接退出
+# BMAD 模式下，若本次只做了 planning/create-story/ci-fix，没有认领 story，直接退出
 if [ "$IS_BMAD" = "true" ] && [ -z "${STORY_KEY:-}" ]; then
-  log_info "本次运行已完成规划/创建 story，等待下次调度认领实施"
+  case "${BMAD_PHASE_LAST:-}" in
+    ci-fix)   log_info "本次运行已完成 CI 修复，等待下次调度认领实施" ;;
+    planning) log_info "本次运行已完成规划，等待下次调度创建 story" ;;
+    *)        log_info "本次运行已完成 story 准备工作，等待下次调度认领实施" ;;
+  esac
   exit 0
 fi
 
@@ -921,9 +978,10 @@ if [ "$IS_BMAD" = "true" ] && [ "${STORY_COMPLETE:-false}" = "true" ] && [ -n "$
     git tag -a "$TAG_NAME" -m "Release story ${STORY_KEY}"
     if git push origin "$TAG_NAME" 2>/dev/null; then
         log_success "Tag 推送成功，GitHub Actions 将自动创建 Release"
-        if wait_for_branch_ci "$TAG_NAME" 600; then
-            log_success "Release CI 全部通过"
-        else
+        tag_ci_result=0
+        wait_for_tag_ci "$TAG_NAME" 300 || tag_ci_result=$?
+        if [ "$tag_ci_result" -eq 1 ]; then
+            # 仅真正失败（非超时/无 CI）时才创建 issue
             CI_LOGS=$(fetch_ci_failure_logs "$TAG_NAME")
             create_ci_failure_issue "$STORY_KEY" "$TAG_NAME" "$CI_LOGS"
         fi
