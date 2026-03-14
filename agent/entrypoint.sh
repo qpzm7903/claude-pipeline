@@ -738,6 +738,7 @@ if [ "$IS_BMAD" = "true" ]; then
 3. 实施当前 task：${TASK_DESC}
    - 遵循 TDD，先写测试再写实现
    - 只修改与该 task 直接相关的代码
+   - **Rust 测试注意**：若 Cargo.toml 含屏幕捕获依赖（xcap/pipewire/libspa），直接用 \`cargo test --no-default-features\`，禁止先跑默认 features 再因报错重试
 4. 实施完成后：
    a. 将 ${STORY_FILE} 中该 task 的 [-] 改为 [x]
    b. 检查 ${STORY_FILE} 中是否还有 [ ] 未做 task：
