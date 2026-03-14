@@ -68,17 +68,12 @@ for line in sys.stdin:
                 elif block.get('type') == 'tool_use':
                     name = block['name']
                     inp = block.get('input', {})
-                    # 对高频辅助工具只打印关键字段，避免截断
+                    # TodoWrite 只打印摘要避免刷屏；其他工具完整打印
                     if name == 'TodoWrite':
                         summary = 'todos=' + str(len(inp.get('todos', [])))
-                    elif isinstance(inp, dict):
-                        summary = str({k: str(v)[:80] for k, v in inp.items()})[:200]
                     else:
-                        summary = str(inp)[:200]
+                        summary = str(inp)
                     print('[Tool]', name, ' ', summary, flush=True)
-        elif t == 'tool_result':
-            out = str(ev.get('content', ''))[:300]
-            print(f'[Result] {out}', flush=True)
         elif t == 'system' and ev.get('subtype') == 'init':
             print('[Init] session:', ev.get('session_id',''), flush=True)
     except json.JSONDecodeError:
