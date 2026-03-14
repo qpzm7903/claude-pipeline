@@ -60,20 +60,141 @@ log_success "克隆完成"
 
 # ── 公共函数 ──────────────────────────────────────────────────────
 
-# 格式化 claude stream-json 输出（保留全部事件，JSON 美化打印，展开换行符）
-_fmt_stream() {
-  python3 -u -c "
+# 启动时将格式化脚本写入临时文件（避免 heredoc 与管道争抢 stdin）
+cat > /tmp/fmt_stream.py << 'PYEOF'
 import sys, json
-for line in sys.stdin:
-    line = line.strip()
-    if not line:
+
+TEXT_LIMIT    = 300
+CONTENT_LINES = 20
+
+def p(s):
+    print(s, flush=True)
+
+for raw in sys.stdin:
+    raw = raw.strip()
+    if not raw:
         continue
     try:
-        formatted = json.dumps(json.loads(line), ensure_ascii=False, indent=2)
-        print(formatted.replace('\\\\n', '\n'), flush=True)
-    except json.JSONDecodeError:
-        print(line, flush=True)
-"
+        obj = json.loads(raw)
+    except ValueError:
+        p(raw)
+        continue
+
+    t = obj.get('type', '')
+
+    # system init：只显示一行摘要
+    if t == 'system':
+        if obj.get('subtype') == 'init':
+            p('  [session] model=' + str(obj.get('model','')) + '  cwd=' + str(obj.get('cwd','')))
+        continue
+
+    # assistant：文本 + tool call 紧凑显示
+    if t == 'assistant':
+        for block in obj.get('message', {}).get('content', []):
+            bt = block.get('type', '')
+            if bt == 'text':
+                text = block.get('text', '').strip()
+                if not text:
+                    continue
+                if len(text) > TEXT_LIMIT:
+                    text = text[:TEXT_LIMIT] + ' ...'
+                for ln in text.splitlines():
+                    if ln.strip():
+                        p('  * ' + ln)
+            elif bt == 'tool_use':
+                name = block.get('name', '')
+                inp  = block.get('input', {})
+                if name == 'Bash':
+                    cmd = inp.get('command', '').replace('\n', '; ')[:160]
+                    p('  > Bash    ' + cmd)
+                elif name == 'Read':
+                    fp     = inp.get('file_path', '')
+                    offset = inp.get('offset', '')
+                    lim    = inp.get('limit', '')
+                    rng    = ('  L' + str(offset) + '+' + str(lim)) if offset else ''
+                    p('  > Read    ' + fp + rng)
+                elif name == 'Write':
+                    p('  > Write   ' + inp.get('file_path', ''))
+                elif name == 'Edit':
+                    p('  > Edit    ' + inp.get('file_path', ''))
+                elif name == 'Glob':
+                    p('  > Glob    ' + inp.get('pattern', ''))
+                elif name == 'Grep':
+                    p('  > Grep    ' + inp.get('pattern', '') + '  @ ' + inp.get('path', '.'))
+                elif name == 'TodoWrite':
+                    p('  > Todo    ' + str(len(inp.get('todos', []))) + ' tasks')
+                else:
+                    p('  > ' + name)
+        continue
+
+    # tool result：按类型分级显示
+    tr = obj.get('tool_use_result') or (obj if t == 'tool_result' else None)
+    if tr is not None:
+        if isinstance(tr, dict):
+            stdout  = tr.get('stdout', '')
+            stderr  = tr.get('stderr', '')
+            content = tr.get('content', '')
+            if stdout:
+                for ln in stdout.rstrip().splitlines():
+                    p('  | ' + ln)
+            if stderr and str(tr.get('exitCode', '0')) != '0':
+                for ln in stderr.rstrip().splitlines()[:5]:
+                    p('  ! ' + ln)
+            if content and not stdout:
+                lines = content.splitlines()
+                for ln in lines[:CONTENT_LINES]:
+                    p('  | ' + ln)
+                if len(lines) > CONTENT_LINES:
+                    p('  | ... (' + str(len(lines) - CONTENT_LINES) + ' more lines)')
+            parts = []
+            for k in ('numLines', 'totalLines', 'numFiles', 'durationMs', 'truncated', 'exitCode'):
+                if k in tr:
+                    parts.append(k + '=' + str(tr[k]))
+            if parts:
+                p('  < ' + ', '.join(parts))
+        elif isinstance(tr, list):
+            for item in tr[:3]:
+                p('  | ' + str(item)[:120])
+            if len(tr) > 3:
+                p('  | ... (' + str(len(tr) - 3) + ' more)')
+        else:
+            text = str(tr).strip()
+            if text:
+                for ln in text.splitlines()[:10]:
+                    p('  | ' + ln)
+        continue
+
+    # 含 content/file 的其他事件（glm 格式文件读取结果）
+    if 'content' in obj or 'tool_use_result' in obj:
+        file_obj = obj.get('file') or {}
+        content  = obj.get('content', '')
+        if isinstance(content, str) and content.strip():
+            lines = content.splitlines()
+            for ln in lines[:CONTENT_LINES]:
+                p('  | ' + ln)
+            if len(lines) > CONTENT_LINES:
+                p('  | ... (' + str(len(lines) - CONTENT_LINES) + ' more lines)')
+        elif file_obj:
+            fp  = file_obj.get('filePath', '')
+            nln = file_obj.get('numLines', '?')
+            p('  < file: ' + fp + '  (' + str(nln) + ' lines)')
+        continue
+
+    # result（最终完成事件）
+    if t == 'result':
+        cost     = obj.get('cost_usd', 0) or 0
+        turns    = obj.get('num_turns', 0)
+        duration = (obj.get('duration_ms', 0) or 0) // 1000
+        subtype  = obj.get('subtype', '')
+        p('  [done] ' + subtype + '  turns=' + str(turns) + '  cost=$' + '{:.4f}'.format(cost) + '  ' + str(duration) + 's')
+        continue
+
+    # 其他事件：静默丢弃
+PYEOF
+
+# 格式化 claude stream-json 输出（管道 stdin 专用于 claude 数据）
+_fmt_stream() {
+  python3 -u /tmp/fmt_stream.py 2>&1
 }
 
 # BMAD 规划阶段：生成 PRD / architecture / sprint-status.yaml + project-context.md
@@ -341,62 +462,38 @@ except Exception as e:
 }
 
 
-# CI 全绿后打 tag + 发布 GitHub Release
-create_tag_and_release() {
-  local task_id="$1"
-  local branch="$2"
-  local timestamp
-  timestamp=$(date -u +%Y%m%d-%H%M%S)
-  local tag_name="task-${task_id}-${timestamp}"
+# CI 失败时创建 GitHub Issue（label: pipeline-ci-failure）
+create_ci_failure_issue() {
+  local story_key="$1"
+  local tag_name="$2"
+  local ci_logs="$3"
   local OWNER_REPO
   OWNER_REPO=$(echo "$REPO_URL" | sed 's|.*github\.com/||;s|\.git$||')
 
-  log_section "创建 Tag 和 GitHub Release"
+  # 确保 label 存在（首次运行时创建）
+  gh label create "pipeline-ci-failure" --color "d93f0b" \
+    --description "CI failure tracked by pipeline" \
+    --repo "$OWNER_REPO" 2>/dev/null || true
 
-  local pr_title pr_summary pr_url=""
-  pr_title=$(python3 -c "
-import json, pathlib
-p = pathlib.Path('/workspace/review_result.json')
-print(json.loads(p.read_text()).get('title','Task ${task_id}') if p.exists() else 'Task ${task_id}')
-" 2>/dev/null || echo "Task ${task_id}")
-  pr_summary=$(python3 -c "
-import json, pathlib
-p = pathlib.Path('/workspace/review_result.json')
-print(json.loads(p.read_text()).get('summary','') if p.exists() else '')
-" 2>/dev/null || echo "")
-  [ -f "/workspace/pr_url.txt" ] && pr_url=$(cat /workspace/pr_url.txt)
+  # 创建 issue
+  ISSUE_URL=$(gh issue create \
+    --repo "$OWNER_REPO" \
+    --title "CI failure: ${story_key} (${tag_name})" \
+    --label "pipeline-ci-failure" \
+    --body "## CI 失败报告
 
-  git tag -a "$tag_name" -m "Task ${task_id}: ${pr_title}" 2>/dev/null || true
-  git push origin "$tag_name" 2>/dev/null || { log_warning "tag 推送失败，跳过 release"; return 0; }
+**Story**: ${story_key}
+**Tag**: ${tag_name}
 
-  python3 - <<PYEOF
-import urllib.request, json, os
-payload = json.dumps({
-    "tag_name": "${tag_name}",
-    "name": "Task ${task_id}: ${pr_title}",
-    "body": "## Summary\n${pr_summary}\n\n## Pipeline Info\n- Task: ${task_id}\n- Branch: ${branch}\n- PR: ${pr_url}\n\n*Automated by Claude Pipeline*",
-    "draft": False,
-    "prerelease": False
-}).encode()
-req = urllib.request.Request(
-    f"https://api.github.com/repos/${OWNER_REPO}/releases",
-    data=payload,
-    headers={
-        "Authorization": f"token {os.environ.get('GIT_TOKEN','')}",
-        "Content-Type": "application/json",
-        "Accept": "application/vnd.github.v3+json",
-        "User-Agent": "claude-pipeline"
-    },
-    method="POST"
-)
-try:
-    resp = urllib.request.urlopen(req, timeout=15)
-    data = json.loads(resp.read())
-    print(f"Release: {data.get('html_url','')}")
-except Exception as e:
-    print(f"Release 创建失败: {e}")
-PYEOF
-  log_success "Tag ${tag_name} 和 Release 已发布"
+## 失败摘要
+\`\`\`
+${ci_logs}
+\`\`\`
+
+*由 Claude Pipeline 自动创建*" 2>/dev/null || echo "")
+
+  log_warning "CI 失败，已创建 issue: ${ISSUE_URL}"
+  echo "$ISSUE_URL" > /workspace/ci_failure_issue.txt
 }
 
 # ── 步骤 1.5: 任务发现与认领 ─────────────────────────────────────
@@ -423,16 +520,43 @@ if [ "$IS_BMAD" = "true" ]; then
 
     case "$BMAD_PHASE" in
       discover)
-        if [ ! -f "$STATUS_FILE" ]; then
+        # 最高优先：检查是否有未解决的 CI failure issue
+        OPEN_CI_ISSUE=$(gh issue list \
+          --label "pipeline-ci-failure" \
+          --state open \
+          --json number,title \
+          --limit 1 \
+          --jq '.[0]' 2>/dev/null || echo "")
+
+        if [ -n "$OPEN_CI_ISSUE" ] && [ "$OPEN_CI_ISSUE" != "null" ]; then
+          log_info "发现未解决的 CI failure issue，优先修复"
+          BMAD_PHASE="ci-fix"
+        elif [ ! -f "$STATUS_FILE" ]; then
           BMAD_PHASE="planning"
         else
-          # ready-for-dev story
-          STATUS_LINE=$(grep -n 'status:\s*ready-for-dev' "$STATUS_FILE" | head -1 | cut -d: -f1 || true)
           STORY_KEY=""
-          if [ -n "$STATUS_LINE" ]; then
-            STORY_KEY=$(head -n "$STATUS_LINE" "$STATUS_FILE" \
+
+          # 优先：找 in-progress story 且 story 文件内还有待做 task（[ ]）
+          while IFS= read -r line; do
+            line_num=$(echo "$line" | cut -d: -f1)
+            candidate=$(head -n "$line_num" "$STATUS_FILE" \
                         | grep 'id:' | tail -1 \
                         | sed 's/.*id:\s*//' | tr -d '"' | tr -d ' ')
+            candidate_file=$(find "$IMPL_DIR" -name "${candidate}*.md" 2>/dev/null | head -1)
+            if [ -n "$candidate_file" ] && grep -q '^\- \[ \]' "$candidate_file" 2>/dev/null; then
+              STORY_KEY="$candidate"
+              break
+            fi
+          done < <(grep -n 'status:\s*in-progress' "$STATUS_FILE" 2>/dev/null || true)
+
+          # 次选：找 ready-for-dev story
+          if [ -z "$STORY_KEY" ]; then
+            STATUS_LINE=$(grep -n 'status:\s*ready-for-dev' "$STATUS_FILE" | head -1 | cut -d: -f1 || true)
+            if [ -n "$STATUS_LINE" ]; then
+              STORY_KEY=$(head -n "$STATUS_LINE" "$STATUS_FILE" \
+                          | grep 'id:' | tail -1 \
+                          | sed 's/.*id:\s*//' | tr -d '"' | tr -d ' ')
+            fi
           fi
 
           if [ -n "$STORY_KEY" ]; then
@@ -450,7 +574,7 @@ if [ "$IS_BMAD" = "true" ]; then
 
       planning)
         run_bmad_planning
-        BMAD_PHASE="discover"
+        BMAD_PHASE="done"  # 一次容器只做一件事：规划完即退出
         ;;
 
       create-story)
@@ -459,33 +583,92 @@ if [ "$IS_BMAD" = "true" ]; then
           READINESS_CHECKED=true
         fi
         run_bmad_create_story
-        BMAD_PHASE="discover"
+        BMAD_PHASE="done"  # 一次容器只做一件事：创建 story 后退出，下次触发再认领
         ;;
 
       claim)
-        # 原子认领：status: ready-for-dev → in-progress
-        python3 -c "
-import re, sys
-content = open('${STATUS_FILE}').read()
-pattern = r'(id:\s*${STORY_KEY}.*?status:\s*)ready-for-dev'
-result = re.sub(pattern, r'\1in-progress', content, count=1, flags=re.DOTALL)
-open('${STATUS_FILE}', 'w').write(result)
-"
-        # 找对应 story 文件
+        # 找 story 文件
         STORY_FILE_PATH=$(find "$IMPL_DIR" -name "${STORY_KEY}*.md" 2>/dev/null | head -1)
         if [ -z "$STORY_FILE_PATH" ]; then
           log_warning "story 文件不存在（${STORY_KEY}），先创建 story..."
-          git checkout "$STATUS_FILE"
           BMAD_PHASE="create-story"
           continue
         fi
 
-        git add "$STATUS_FILE"
-        git commit -m "chore: claim story ${STORY_KEY} [skip ci]" --no-verify 2>/dev/null
+        # 若 story 仍是 ready-for-dev，先标记为 in-progress
+        python3 -c "
+import re
+content = open('${STATUS_FILE}').read()
+result = re.sub(r'(id:\s*${STORY_KEY}.*?status:\s*)ready-for-dev',
+                r'\1in-progress', content, count=1, flags=re.DOTALL)
+open('${STATUS_FILE}', 'w').write(result)
+" 2>/dev/null || true
+
+        # 原子认领 story 内第一个待做 task（[ ] → [-]）
+        TASK_LINE_RAW=$(grep -n '^\- \[ \]' "$STORY_FILE_PATH" | head -1)
+        if [ -z "$TASK_LINE_RAW" ]; then
+          log_warning "story ${STORY_KEY} 没有待做 task，标记为 review 后退出"
+          python3 -c "
+import re
+content = open('${STATUS_FILE}').read()
+result = re.sub(r'(id:\s*${STORY_KEY}.*?status:\s*)in-progress',
+                r'\1review', content, count=1, flags=re.DOTALL)
+open('${STATUS_FILE}', 'w').write(result)
+" 2>/dev/null || true
+          git add "$STATUS_FILE"
+          git commit -m "chore: mark ${STORY_KEY} review - all tasks done [skip ci]" --no-verify 2>/dev/null
+          git push origin "$DEFAULT_BRANCH" 2>/dev/null || true
+          exit 0
+        fi
+
+        TASK_LINE_NUM=$(echo "$TASK_LINE_RAW" | cut -d: -f1)
+        TASK_DESC=$(echo "$TASK_LINE_RAW" | sed 's/^[0-9]*:- \[ \] *//')
+        sed -i "${TASK_LINE_NUM}s/^\- \[ \]/- [-]/" "$STORY_FILE_PATH"
+
+        git add "$STATUS_FILE" "$STORY_FILE_PATH"
+        git commit -m "chore: claim task in ${STORY_KEY}: ${TASK_DESC} [skip ci]" --no-verify 2>/dev/null
         git push origin "$DEFAULT_BRANCH" 2>/dev/null || log_warning "push 认领标记失败，继续执行"
+
         export STORY_KEY="$STORY_KEY"
         export STORY_FILE="$STORY_FILE_PATH"
-        log_success "认领 story: $STORY_KEY → $STORY_FILE"
+        export TASK_DESC="$TASK_DESC"
+        export TASK_LINE_NUM="$TASK_LINE_NUM"
+        log_success "认领 task: [${STORY_KEY}] ${TASK_DESC}"
+        BMAD_PHASE="done"
+        ;;
+
+      ci-fix)
+        CI_ISSUE_NUM=$(gh issue list \
+          --label "pipeline-ci-failure" \
+          --state open \
+          --json number --jq '.[0].number' 2>/dev/null || echo "")
+        if [ -z "$CI_ISSUE_NUM" ]; then
+          log_warning "未找到 pipeline-ci-failure issue，跳过修复"
+          BMAD_PHASE="done"
+          break
+        fi
+        CI_ISSUE_BODY=$(gh issue view "$CI_ISSUE_NUM" --json body --jq '.body' 2>/dev/null || echo "")
+
+        log_section "修复 CI failure issue #${CI_ISSUE_NUM}"
+
+        CI_FIX_PROMPT="你是一名资深工程师，需要修复以下 CI 失败：
+
+## Issue 内容
+${CI_ISSUE_BODY}
+
+## 执行步骤
+1. 用 gh run list / gh run view 获取完整 CI 日志
+2. 分析根因
+3. 修复代码（遵循现有代码风格）
+4. 运行本地测试验证修复
+5. git add -A && git commit -m 'fix: resolve CI failure for issue #${CI_ISSUE_NUM}'
+6. 关闭 issue：gh issue close ${CI_ISSUE_NUM} --comment '已修复'
+7. 输出 PIPELINE_COMPLETE"
+
+        claude --dangerously-skip-permissions --print --verbose \
+          --output-format stream-json <<< "$CI_FIX_PROMPT" 2>&1 | _fmt_stream
+        [ "${PIPESTATUS[0]}" -ne 0 ] && log_warning "CI 修复调用失败，继续流程"
+
         BMAD_PHASE="done"
         ;;
 
@@ -527,27 +710,38 @@ fi
 
 # ── 步骤 2: Claude 自主执行 ──────────────────────────────────────
 
+# BMAD 模式下，若本次只做了 planning/create-story，没有认领 story，直接退出
+if [ "$IS_BMAD" = "true" ] && [ -z "${STORY_KEY:-}" ]; then
+  log_info "本次运行已完成规划/创建 story，等待下次调度认领实施"
+  exit 0
+fi
+
 log_section "步骤 2: Claude 自主执行"
 
 if [ "$IS_BMAD" = "true" ]; then
-  # ── BMAD 模式：读取 story 文件 + 遵循 dev-story workflow ──────
-  PROMPT="你是一名资深软件工程师，按照 BMAD 开发工作流实现分配给你的 story。
+  # ── BMAD 模式：只实施 story 内当前认领的单个 task ──────────────
+  PROMPT="你是一名资深软件工程师，按照 BMAD 开发工作流实施 story 内的一个 task。
 
-## 你的任务
-Story 文件：${STORY_FILE}
-Story Key：${STORY_KEY}
+## 本次任务（只做这一个）
+- Story 文件：${STORY_FILE}
+- Story Key：${STORY_KEY}
+- 当前 Task（已标记为 [-]）：${TASK_DESC}
 
 ## 执行步骤
 0. 若 _bmad-output/project-context.md 存在，先阅读了解项目全局上下文
-0.5. 若 _bmad-output/dev-log.md 存在，先阅读了解前序 story 的技术决策
-1. 读取 ${STORY_FILE} 完整内容，理解 Story、Acceptance Criteria、Tasks
+0.5. 若 _bmad-output/dev-log.md 存在，先阅读了解前序技术决策
+1. 读取 ${STORY_FILE} 完整内容，理解 Story、Acceptance Criteria 以及所有 Tasks（了解上下文，但本次只实施当前 task）
 2. 读取 _bmad/bmm/config.yaml 了解项目配置
-3. 读取 _bmad/bmm/workflows/4-implementation/dev-story/workflow.md，完整遵循其工作流指令
-4. 按 workflow 实施 story（TDD、测试）
-5. 实施完成后：
-   - 将 ${STORY_FILE} 中 Status 字段改为 review（或 done，若已通过代码审查）
-   - 将 _bmad-output/implementation-artifacts/sprint-status.yaml 中该 story 状态改为 review
-6. 最后输出 PIPELINE_COMPLETE"
+3. 实施当前 task：${TASK_DESC}
+   - 遵循 TDD，先写测试再写实现
+   - 只修改与该 task 直接相关的代码
+4. 实施完成后：
+   a. 将 ${STORY_FILE} 中该 task 的 [-] 改为 [x]
+   b. 检查 ${STORY_FILE} 中是否还有 [ ] 未做 task：
+      - 若还有未做 task：不修改 story Status，不修改 sprint-status.yaml
+      - 若所有 task 均已 [x]：将 Status 改为 review，并将 sprint-status.yaml 中该 story 状态改为 review
+   c. git add -A && git commit（根据本次实际变更写简洁有意义的 commit message，遵循 Conventional Commits 规范）
+5. 最后输出 PIPELINE_COMPLETE"
 
 else
   # ── 非 BMAD 模式：保留现有通用 prompt ────────────────────────
@@ -620,7 +814,9 @@ ${TASK_HINT}
 
 ### 第五步：完成
 
-完成所有实施和测试后，输出 PIPELINE_COMPLETE。"
+完成所有实施和测试后：
+- git add -A && git commit（根据本次实际变更内容，写简洁有意义的 commit message，遵循 Conventional Commits 规范）
+- 输出 PIPELINE_COMPLETE"
 fi
 
 log_info "启动 Claude 自主执行..."
@@ -638,6 +834,16 @@ fi
 
 log_success "Claude 自主执行完成"
 
+# ── Story 完成检测 ────────────────────────────────────────────────
+# 检查 story 文件中是否还有未完成 task（[ ] 待做 或 [-] 进行中）
+STORY_COMPLETE=false
+if [ "$IS_BMAD" = "true" ] && [ -n "${STORY_FILE:-}" ]; then
+    if ! grep -q '^\- \[[ -]\]' "${STORY_FILE}" 2>/dev/null; then
+        STORY_COMPLETE=true
+        log_info "Story ${STORY_KEY} 全部 task 完成"
+    fi
+fi
+
 # ── 步骤 2.5: dev-log + 独立审查 ─────────────────────────────────
 
 # Opt6: BMAD story 完成后追加开发日志
@@ -649,38 +855,23 @@ fi
 REVIEW_TASK_ID="${STORY_KEY:-${TASK_ID:-unknown}}"
 run_independent_review "$REVIEW_TASK_ID"
 
-# ── 步骤 3: 提交 + 推送 + PR ────────────────────────────────────────
+# ── 步骤 3: 推送 + PR ──────────────────────────────────────────────
+# Claude 应在步骤 2 中自行 commit，此处仅做安全兜底
 
-log_section "步骤 3: 提交代码"
+log_section "步骤 3: 推送代码"
 
 cd "${WORKSPACE}"
-git add -A
-
 CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
 
-# 如果有未提交的变更，先 commit
+# 安全兜底：若 Claude 遗漏了 commit，警告并补一个
+git add -A
 if ! git diff --cached --quiet; then
-    REVIEW_VERDICT=$(python3 -c "
-import json, pathlib
-p = pathlib.Path('review_result.json')
-print(json.loads(p.read_text()).get('verdict','unknown') if p.exists() else 'no-review')
-" 2>/dev/null || echo "unknown")
-
-    ACTUAL_TASK_ID=$(python3 -c "
-import json, pathlib
-p = pathlib.Path('review_result.json')
-print(json.loads(p.read_text()).get('task_id','${TASK_ID:-unknown}') if p.exists() else '${TASK_ID:-unknown}')
-" 2>/dev/null || echo "${TASK_ID:-unknown}")
-
-    git commit -m "feat(task-${ACTUAL_TASK_ID}): automated implementation
-
-Automated by Claude Pipeline
-Review verdict: ${REVIEW_VERDICT}
-Task-Id: ${ACTUAL_TASK_ID}"
-
-    log_success "代码已提交（分支: ${CURRENT_BRANCH}）"
+    log_warning "Claude 未自行提交，bash 兜底提交（建议检查 prompt）"
+    FALLBACK_ID="${STORY_KEY:-${TASK_ID:-unknown}}"
+    git commit -m "chore(${FALLBACK_ID}): fallback commit by pipeline [Claude did not commit]"
+    log_success "兜底提交完成（分支: ${CURRENT_BRANCH}）"
 else
-    log_info "无新变更需要提交（Claude 已在执行中自行提交）"
+    log_info "Claude 已自行提交，跳过兜底"
 fi
 
 # 无论是否新增 commit，只要本地有提交就推送
@@ -705,31 +896,23 @@ else
     SHOULD_PUSH=0
 fi
 
-# ── 步骤 3.5: 等待 CI 结果 → 发布 Release 或持久化失败状态 ────────
+# ── 步骤 3.5: 仅 story 完成时打 tag + 等待 CI ───────────────────────
 
-if [ -n "${GIT_TOKEN:-}" ] && [ "${SHOULD_PUSH:-0}" -eq 1 ]; then
-    RELEASE_TASK_ID="${STORY_KEY:-${TASK_ID:-unknown}}"
+if [ "$IS_BMAD" = "true" ] && [ "${STORY_COMPLETE:-false}" = "true" ] && [ -n "${GIT_TOKEN:-}" ]; then
+    TAG_NAME="story-${STORY_KEY}-$(date -u +%Y%m%d-%H%M%S)"
+    log_section "Story ${STORY_KEY} 完成，打 Release Tag: ${TAG_NAME}"
 
-    if wait_for_branch_ci "${CURRENT_BRANCH}" 600; then
-        # CI 全绿 → 打 tag + 发布 GitHub Release
-        create_tag_and_release "$RELEASE_TASK_ID" "$CURRENT_BRANCH"
+    git tag -a "$TAG_NAME" -m "Release story ${STORY_KEY}"
+    if git push origin "$TAG_NAME" 2>/dev/null; then
+        log_success "Tag 推送成功，GitHub Actions 将自动创建 Release"
+        if wait_for_branch_ci "$TAG_NAME" 600; then
+            log_success "Release CI 全部通过"
+        else
+            CI_LOGS=$(fetch_ci_failure_logs "$TAG_NAME")
+            create_ci_failure_issue "$STORY_KEY" "$TAG_NAME" "$CI_LOGS"
+        fi
     else
-        # CI 失败 → 获取日志 → 内联修复
-        CI_LOGS=$(fetch_ci_failure_logs "${CURRENT_BRANCH}")
-        log_warning "CI 失败，启动内联修复..."
-        CI_FIX_PROMPT="CI 检查失败。任务：${RELEASE_TASK_ID}。失败信息：
-${CI_LOGS}
-
-请：
-1. 用 gh run list / gh run view 获取完整 CI 日志
-2. 分析根因
-3. 修复代码
-4. git add -A && git commit -m 'fix: ci failure for ${RELEASE_TASK_ID}'
-5. git push origin ${CURRENT_BRANCH}
-输出 FIX_COMPLETE。"
-        claude --dangerously-skip-permissions --print --verbose \
-            --output-format stream-json <<< "$CI_FIX_PROMPT" 2>&1 | _fmt_stream
-        [ "${PIPESTATUS[0]}" -ne 0 ] && log_warning "CI 修复调用失败，继续流程"
+        log_warning "Tag 推送失败，跳过 Release"
     fi
 fi
 
