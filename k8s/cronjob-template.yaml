@@ -24,17 +24,24 @@ spec:
         spec:
           serviceAccountName: claude-pipeline-agent
           restartPolicy: Never
+          volumes:
+            - name: cargo-registry-cache
+              persistentVolumeClaim:
+                claimName: cargo-registry-cache
           containers:
             - name: agent
               image: {IMAGE}
               imagePullPolicy: {IMAGE_PULL_POLICY}
               resources:
                 requests:
-                  memory: "1Gi"
-                  cpu: "500m"
-                limits:
-                  memory: "4Gi"
+                  memory: "2Gi"
                   cpu: "1000m"
+                limits:
+                  memory: "8Gi"
+                  cpu: "4000m"
+              volumeMounts:
+                - name: cargo-registry-cache
+                  mountPath: /home/pipeline/.cargo/registry
               env:
                 - name: REPO_URL
                   value: "{REPO_URL}"

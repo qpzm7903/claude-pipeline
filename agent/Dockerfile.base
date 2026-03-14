@@ -44,6 +44,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     zlib1g-dev \
     libbz2-dev \
     libffi-dev \
+    # Tauri 构建依赖（桌面应用常见框架）
+    libgtk-3-dev \
+    libwebkit2gtk-4.1-dev \
+    libappindicator3-dev \
+    librsvg2-dev \
+    patchelf \
+    libglib2.0-dev \
+    libpipewire-0.3-dev \
+    libxdo-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # ── 2. GitHub CLI ────────────────────────────────────────────────────

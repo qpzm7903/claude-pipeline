@@ -899,7 +899,7 @@ fi
 # ── 步骤 3.5: 仅 story 完成时打 tag + 等待 CI ───────────────────────
 
 if [ "$IS_BMAD" = "true" ] && [ "${STORY_COMPLETE:-false}" = "true" ] && [ -n "${GIT_TOKEN:-}" ]; then
-    TAG_NAME="story-${STORY_KEY}-$(date -u +%Y%m%d-%H%M%S)"
+    TAG_NAME="v${STORY_KEY}-$(date -u +%Y%m%d-%H%M%S)"
     log_section "Story ${STORY_KEY} 完成，打 Release Tag: ${TAG_NAME}"
 
     git tag -a "$TAG_NAME" -m "Release story ${STORY_KEY}"
