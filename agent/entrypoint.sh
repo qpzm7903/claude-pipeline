@@ -51,35 +51,6 @@ log_success "克隆完成"
 
 # ── 公共函数 ──────────────────────────────────────────────────────
 
-# 解析并打印 claude stream-json 输出
-_stream_claude_output() {
-  python3 -u -c "
-import sys, json
-for line in sys.stdin:
-    line = line.strip()
-    if not line: continue
-    try:
-        ev = json.loads(line)
-        t = ev.get('type', '')
-        if t == 'assistant':
-            for block in ev.get('message', {}).get('content', []):
-                if block.get('type') == 'text':
-                    print('[Claude]', block['text'], flush=True)
-                elif block.get('type') == 'tool_use':
-                    name = block['name']
-                    inp = block.get('input', {})
-                    # TodoWrite 只打印摘要避免刷屏；其他工具完整打印
-                    if name == 'TodoWrite':
-                        summary = 'todos=' + str(len(inp.get('todos', [])))
-                    else:
-                        summary = str(inp)
-                    print('[Tool]', name, ' ', summary, flush=True)
-        elif t == 'system' and ev.get('subtype') == 'init':
-            print('[Init] session:', ev.get('session_id',''), flush=True)
-    except json.JSONDecodeError:
-        print(line, flush=True)
-"
-}
 
 # BMAD 规划阶段：生成 PRD / architecture / sprint-status.yaml
 run_bmad_planning() {
@@ -108,9 +79,9 @@ run_bmad_planning() {
 输出 BMAD_PLANNING_COMPLETE。"
 
   timeout "${AGENT_TIMEOUT}" claude \
-      --dangerously-skip-permissions --print --verbose --output-format stream-json \
-      <<< "$PLANNING_PROMPT" 2>&1 | _stream_claude_output
-  [ "${PIPESTATUS[0]}" -ne 0 ] && { log_error "BMAD 规划失败"; exit 2; }
+      --dangerously-skip-permissions --print --verbose \
+      <<< "$PLANNING_PROMPT"
+  [ $? -ne 0 ] && { log_error "BMAD 规划失败"; exit 2; }
   log_success "BMAD 规划完成"
 }
 
@@ -133,9 +104,9 @@ run_bmad_create_story() {
 输出 BMAD_CREATE_STORY_COMPLETE。"
 
   timeout "${AGENT_TIMEOUT}" claude \
-      --dangerously-skip-permissions --print --verbose --output-format stream-json \
-      <<< "$CREATE_STORY_PROMPT" 2>&1 | _stream_claude_output
-  [ "${PIPESTATUS[0]}" -ne 0 ] && { log_error "create-story 失败"; exit 2; }
+      --dangerously-skip-permissions --print --verbose \
+      <<< "$CREATE_STORY_PROMPT"
+  [ $? -ne 0 ] && { log_error "create-story 失败"; exit 2; }
   log_success "create-story 完成"
 }
 
@@ -392,10 +363,8 @@ timeout "${AGENT_TIMEOUT}" claude \
         --dangerously-skip-permissions \
         --print \
         --verbose \
-        --output-format stream-json \
-        <<< "${PROMPT}" 2>&1 \
-    | _stream_claude_output
-if [ "${PIPESTATUS[0]}" -ne 0 ]; then
+        <<< "${PROMPT}"
+if [ $? -ne 0 ]; then
     log_error "Claude 执行超时或失败"
     exit 2
 fi
