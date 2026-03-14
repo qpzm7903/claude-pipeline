@@ -13,7 +13,9 @@ set -euo pipefail
 
 # ── 日志持久化：同时 tee 到 cargo-cache PVC，防止 Docker GC 后日志丢失 ──────
 _LOG_DIR="/home/pipeline/.cargo/registry/pipeline-logs"
-mkdir -p "${_LOG_DIR}" 2>/dev/null || true
+# 确保目录存在且归 pipeline 用户所有（首次可能由 root 创建）
+sudo mkdir -p "${_LOG_DIR}" 2>/dev/null || mkdir -p "${_LOG_DIR}" 2>/dev/null || true
+sudo chown "$(id -u):$(id -g)" "${_LOG_DIR}" 2>/dev/null || true
 _LOG_FILE="${_LOG_DIR}/$(date +%Y%m%d-%H%M%S)-$(hostname -s 2>/dev/null || echo pod).log"
 # 将所有 stdout/stderr 同时写入日志文件（tee 保持终端彩色输出不变）
 exec > >(tee -a "${_LOG_FILE}") 2>&1
