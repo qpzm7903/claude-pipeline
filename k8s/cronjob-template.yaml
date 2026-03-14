@@ -9,7 +9,7 @@ metadata:
     claude-pipeline/repo: "{REPO_SLUG}"
 spec:
   schedule: "{SCHEDULE}"
-  concurrencyPolicy: Allow
+  concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 3
   jobTemplate:
