@@ -39,8 +39,14 @@ The system is a single-process pipeline — no orchestrator needed:
 - Containers are fully autonomous; host has no further involvement
 
 **Agent** (inside Docker container, per task):
-- `agent/entrypoint.sh` — 4 steps: git clone → **Git atomic claim (step 1.5)** → invoke Claude → git push + PR
+- `agent/entrypoint.sh` — 6 steps: git clone → **BMAD phase loop / Git atomic claim (step 1.5)** → invoke Claude → **independent review (step 2.5)** → git push + PR → **PR feedback loop (step 4)**
 - `agent/create_pr.py` — GitHub REST API PR creation; reads `review_result.json` for PR body; creates draft PR if verdict ≠ "pass"
+
+**BMAD phase loop** (step 1.5): A `while` state machine cycles through `discover→planning→create-story→claim→done` within a single container run. No external restart needed. `MAX_PHASE_LOOPS=5` prevents infinite loops.
+
+**Independent review** (step 2.5): A separate Claude invocation reviews the diff with zero implementation context — eliminates "grading your own exam" bias. Followed by `append_dev_log()` for BMAD projects.
+
+**PR feedback loop** (step 4): After PR creation, waits for CI status (up to 10min) and checks for review comments. If issues found, Claude auto-fixes and pushes (up to 2 retries).
 
 **Concurrency via Git**: Multiple containers can run against the same repo simultaneously.
 Each container races to `git push` a `[-]` marker for one task. Only the successful push wins the task (Git fast-forward rejection = distributed lock). No SQLite, no coordinator.

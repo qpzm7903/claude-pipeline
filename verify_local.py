@@ -37,6 +37,14 @@ def test_entrypoint_prompt():
         ("run_bmad_planning",    "BMAD 规划函数"),
         ("run_bmad_create_story", "BMAD create-story 函数"),
         ("dev-story/workflow.md", "BMAD dev-story 工作流引用"),
+        ("BMAD_PHASE",             "BMAD 阶段循环状态机"),
+        ("MAX_PHASE_LOOPS",        "循环防护上限"),
+        ("run_independent_review", "独立代码审查函数"),
+        ("project-context.md",     "项目上下文文件引用"),
+        ("run_pr_feedback_loop",   "PR 反馈循环函数"),
+        ("run_readiness_check",    "实施就绪检查函数"),
+        ("append_dev_log",         "开发日志追加函数"),
+        ("dev-log.md",             "开发日志文件引用"),
     ]
 
     all_ok = True

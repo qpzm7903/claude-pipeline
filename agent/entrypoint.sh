@@ -3,8 +3,8 @@
 #
 # bash 只做三件事：
 #   1. 克隆仓库 + 创建分支
-#   2. 启动 Claude（读 plan.md 或 BMAD story → 自主决策 → 实施 → 审查）
-#   3. 提交代码 + 推送 + 创建 PR
+#   2. 启动 Claude（读 plan.md 或 BMAD story → 自主决策 → 实施）
+#   3. 独立审查 + 提交代码 + 推送 + 创建 PR + 反馈闭环
 #
 # 容器启动只需 REPO_URL + TASK_ID（最小标识）+ 认证信息。
 # 任务详情、分支策略、技术栈、测试命令全部由 Claude 在容器内自主发现。
@@ -42,7 +42,17 @@ log_section "步骤 1: 克隆仓库"
 AUTH_URL="${REPO_URL}"
 [ -n "${GIT_TOKEN:-}" ] && AUTH_URL="${REPO_URL/https:\/\//https://x-access-token:${GIT_TOKEN}@}"
 
-git clone --depth=20 "${AUTH_URL}" "${WORKSPACE}"
+# 克隆重试（网络抖动保护：最多 3 次，间隔指数退避）
+CLONE_OK=false
+for _clone_attempt in 1 2 3; do
+  if git clone --depth=20 "${AUTH_URL}" "${WORKSPACE}" 2>&1; then
+    CLONE_OK=true; break
+  fi
+  log_warning "克隆失败（attempt ${_clone_attempt}/3），${_clone_attempt}0s 后重试..."
+  sleep $((_clone_attempt * 10))
+done
+[ "$CLONE_OK" = "false" ] && { log_error "克隆仓库失败（3次重试后）"; exit 1; }
+
 cd "${WORKSPACE}"
 git config user.name  "${GIT_AUTHOR_NAME:-Claude Pipeline Bot}"
 git config user.email "${GIT_AUTHOR_EMAIL:-pipeline@claude.ai}"
@@ -50,8 +60,23 @@ log_success "克隆完成"
 
 # ── 公共函数 ──────────────────────────────────────────────────────
 
+# 格式化 claude stream-json 输出（保留全部事件，JSON 美化打印，展开换行符）
+_fmt_stream() {
+  python3 -u -c "
+import sys, json
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        formatted = json.dumps(json.loads(line), ensure_ascii=False, indent=2)
+        print(formatted.replace('\\\\n', '\n'), flush=True)
+    except json.JSONDecodeError:
+        print(line, flush=True)
+"
+}
 
-# BMAD 规划阶段：生成 PRD / architecture / sprint-status.yaml
+# BMAD 规划阶段：生成 PRD / architecture / sprint-status.yaml + project-context.md
 run_bmad_planning() {
   log_section "BMAD 规划阶段"
   PLANNING_PROMPT="你是 BMAD 产品经理兼架构师，负责为仓库自动生成规划文档和第一批开发故事。
@@ -65,10 +90,18 @@ run_bmad_planning() {
    → 分析项目（README、现有代码、已完成工作）
    → 按照工作流创建 PRD.md、architecture.md
    → 创建 _bmad-output/planning-artifacts/epics.md（列出所有 epic 和 story 大纲）
+   → 创建 _bmad-output/project-context.md，内容包括：
+     - 项目技术栈及版本
+     - 目录结构约定
+     - 关键依赖及其用途
+     - 编码规范和命名约定
+     - 测试框架及运行命令
+     - CI/CD 配置摘要
 
 2. 若 PRD.md 存在但 sprint-status.yaml 不存在或没有任何 story：
    → 读取 epics.md，将所有 story 写入 _bmad-output/implementation-artifacts/sprint-status.yaml（初始状态为 backlog）
    → 格式参考已有的 sprint-status.yaml 模板
+   → 若 _bmad-output/project-context.md 不存在，补充创建
 
 3. 完成后：
    git add _bmad-output/
@@ -79,8 +112,9 @@ run_bmad_planning() {
 
   claude \
       --dangerously-skip-permissions --print --verbose \
-      <<< "$PLANNING_PROMPT"
-  [ $? -ne 0 ] && { log_error "BMAD 规划失败"; exit 2; }
+      --output-format stream-json \
+      <<< "$PLANNING_PROMPT" 2>&1 | _fmt_stream
+  [ "${PIPESTATUS[0]}" -ne 0 ] && { log_error "BMAD 规划失败"; exit 2; }
   log_success "BMAD 规划完成"
 }
 
@@ -104,9 +138,127 @@ run_bmad_create_story() {
 
   claude \
       --dangerously-skip-permissions --print --verbose \
-      <<< "$CREATE_STORY_PROMPT"
-  [ $? -ne 0 ] && { log_error "create-story 失败"; exit 2; }
+      --output-format stream-json \
+      <<< "$CREATE_STORY_PROMPT" 2>&1 | _fmt_stream
+  [ "${PIPESTATUS[0]}" -ne 0 ] && { log_error "create-story 失败"; exit 2; }
   log_success "create-story 完成"
+}
+
+# Opt6: Story 间上下文传递 — 追加开发日志
+append_dev_log() {
+  local story_key="$1"
+  local log_file="${WORKSPACE}/_bmad-output/dev-log.md"
+  DEVLOG_PROMPT="阅读本次 story ${story_key} 的实现代码变更（git diff HEAD~1），提取：
+1. 关键技术决策及理由
+2. 遇到的问题及解决方案
+3. 对后续 story 有参考价值的约定
+以 markdown 追加到 ${log_file}，每条含 story key 和时间戳，限 200 字。
+完成后：git add ${log_file} && git commit -m 'docs: dev-log for ${story_key} [skip ci]' && git push origin \$(git symbolic-ref --short HEAD 2>/dev/null || echo main)"
+
+  claude --dangerously-skip-permissions --print --verbose \
+      --output-format stream-json <<< "$DEVLOG_PROMPT" 2>&1 | _fmt_stream
+  log_info "dev-log 已更新 (story: ${story_key})"
+}
+
+# Opt5: 实施就绪检查
+run_readiness_check() {
+  log_section "BMAD 实施就绪检查"
+  READINESS_PROMPT="你是 BMAD 质量门禁检查员。
+检查 _bmad-output/planning-artifacts/ 下 PRD.md、architecture.md、epics.md 的一致性：
+- PRD 功能需求是否都在 epics 中有对应 story
+- architecture 技术选型是否与 PRD 匹配
+- story 粒度是否合理（每个≤1天工作量）
+- 是否有缺失的非功能需求
+
+输出 /workspace/readiness_check.json：{\"ready\": true|false, \"issues\": [...], \"suggestions\": [...]}
+若 ready=false，自动修复并重新提交。
+完成后：git add _bmad-output/ && git commit -m 'plan: readiness check fixes [skip ci]' && git push origin \$(git symbolic-ref --short HEAD 2>/dev/null || echo main)"
+
+  claude --dangerously-skip-permissions --print --verbose \
+      --output-format stream-json <<< "$READINESS_PROMPT" 2>&1 | _fmt_stream
+  [ "${PIPESTATUS[0]}" -ne 0 ] && { log_error "就绪检查失败"; exit 2; }
+  log_success "就绪检查完成"
+}
+
+# Opt2: 独立代码审查（独立 Claude 调用，不复用实现上下文）
+run_independent_review() {
+  local task_id="$1"
+  log_section "步骤 2.5: 独立代码审查"
+  REVIEW_PROMPT="你是一名独立代码审查员，对实现过程一无所知，只看结果。
+
+## 审查范围
+git diff origin/$(git symbolic-ref --short HEAD 2>/dev/null || echo main)...HEAD
+
+## 审查标准
+1. 正确性：是否正确实现需求（参考 story 文件或 plan.md）
+2. 安全性：注入、硬编码密钥、不安全依赖
+3. 性能：O(n²)循环、内存泄漏、无限递归
+4. 可维护性：命名、结构、注释
+5. 测试覆盖：关键逻辑是否有测试
+
+## 输出
+写入 /workspace/review_result.json：
+{\"task_id\": \"${task_id}\", \"title\": \"<标题>\", \"verdict\": \"pass|fail\", \"score\": 0-100, \"summary\": \"总结\", \"issues\": [...], \"strengths\": [...], \"recommendation\": \"approve|request_changes\"}
+
+verdict=fail 时自动修复所有 high severity 问题，然后重新审查更新 review_result.json。
+修复后：git add -A && git commit -m 'fix: address review issues for ${task_id}'
+输出 REVIEW_COMPLETE。"
+
+  claude --dangerously-skip-permissions --print --verbose \
+      --output-format stream-json <<< "$REVIEW_PROMPT" 2>&1 | _fmt_stream
+  [ "${PIPESTATUS[0]}" -ne 0 ] && log_warning "独立审查失败，继续流程" || log_success "独立代码审查完成"
+}
+
+# Opt4: PR 反馈闭环 — 等待 CI + review，自动修复
+run_pr_feedback_loop() {
+  local pr_number="$1"
+  local max_retries="${2:-2}"
+  log_section "步骤 4: PR 反馈循环"
+
+  for attempt in $(seq 1 "$max_retries"); do
+    log_info "反馈检查 #${attempt}..."
+    # 等待 CI 完成（最多 10 分钟）
+    local ci_wait=0 ci_status="pending"
+    while [ "$ci_wait" -lt 600 ] && [ "$ci_status" = "pending" ]; do
+      sleep 30; ci_wait=$((ci_wait + 30))
+      OWNER_REPO=$(echo "$REPO_URL" | sed 's|.*github\.com/||;s|\.git$||')
+      ci_status=$(python3 -c "
+import urllib.request, json, os
+url = f'https://api.github.com/repos/${OWNER_REPO}/commits/${CURRENT_BRANCH}/status'
+req = urllib.request.Request(url, headers={'Authorization': f'token {os.environ.get(\"GIT_TOKEN\",\"\")}', 'Accept': 'application/vnd.github.v3+json', 'User-Agent': 'claude-pipeline'})
+try: print(json.loads(urllib.request.urlopen(req,timeout=10).read()).get('state','unknown'))
+except: print('unknown')
+" 2>/dev/null || echo "unknown")
+      log_info "CI: ${ci_status} (${ci_wait}s)"
+    done
+
+    # 获取 review comments
+    review_comments=$(python3 -c "
+import urllib.request, json, os
+url = f'https://api.github.com/repos/${OWNER_REPO}/pulls/${pr_number}/reviews'
+req = urllib.request.Request(url, headers={'Authorization': f'token {os.environ.get(\"GIT_TOKEN\",\"\")}', 'Accept': 'application/vnd.github.v3+json', 'User-Agent': 'claude-pipeline'})
+try:
+    reviews = json.loads(urllib.request.urlopen(req,timeout=10).read())
+    changes = [r.get('body','') for r in reviews if r.get('state')=='CHANGES_REQUESTED']
+    print('\n---\n'.join(changes) if changes else '')
+except: print('')
+" 2>/dev/null || echo "")
+
+    local needs_fix=false fix_context=""
+    [ "$ci_status" = "failure" ] || [ "$ci_status" = "error" ] && { needs_fix=true; fix_context="CI 检查失败，查看日志修复。"; }
+    [ -n "$review_comments" ] && { needs_fix=true; fix_context="${fix_context}\nPR 审查员要求修改：\n${review_comments}"; }
+
+    if [ "$needs_fix" = "false" ]; then
+      log_success "PR 检查通过"; return 0
+    fi
+
+    log_warning "需要修复 (${attempt}/${max_retries})"
+    FIX_PROMPT="你是修复工程师。问题：\n${fix_context}\n\n请分析根因、修复代码、运行测试、git add -A && git commit -m 'fix: address feedback (attempt ${attempt})'\n输出 FIX_COMPLETE"
+    claude --dangerously-skip-permissions --print --verbose \
+        --output-format stream-json <<< "$FIX_PROMPT" 2>&1 | _fmt_stream
+    [ "${PIPESTATUS[0]}" -ne 0 ] && { log_warning "修复调用失败"; break; }
+    git push --force origin "${CURRENT_BRANCH}"
+  done
 }
 
 # ── 步骤 1.5: 任务发现与认领 ─────────────────────────────────────
@@ -116,91 +268,102 @@ IS_BMAD=false
 [ -d "./_bmad" ] && IS_BMAD=true
 
 if [ "$IS_BMAD" = "true" ]; then
-  # ── BMAD 项目路径 ──────────────────────────────────────────────
-  IMPL_DIR="./_bmad-output/implementation-artifacts"
-  STATUS_FILE="${IMPL_DIR}/sprint-status.yaml"
+  # ── BMAD 项目路径：阶段循环状态机 ──────────────────────────────
+  BMAD_PHASE="discover"
+  MAX_PHASE_LOOPS=5
+  PHASE_COUNT=0
+  READINESS_CHECKED=false
 
-  if [ -z "${STORY_FILE:-}" ]; then
-    # 查找 ready-for-dev story（只有未指定时才自动发现）
-    MAX_CLAIM_RETRIES=5
-    CLAIM_SUCCESS=false
+  while [ "$BMAD_PHASE" != "done" ] && [ "$PHASE_COUNT" -lt "$MAX_PHASE_LOOPS" ]; do
+    PHASE_COUNT=$((PHASE_COUNT + 1))
+    log_info "BMAD 阶段循环 #${PHASE_COUNT}: ${BMAD_PHASE}"
 
-    for attempt in $(seq 1 $MAX_CLAIM_RETRIES); do
-      DEFAULT_BRANCH=$(git symbolic-ref --short HEAD 2>/dev/null || echo main)
-      git pull --rebase origin "$DEFAULT_BRANCH" 2>/dev/null || true
+    IMPL_DIR="./_bmad-output/implementation-artifacts"
+    STATUS_FILE="${IMPL_DIR}/sprint-status.yaml"
+    DEFAULT_BRANCH=$(git symbolic-ref --short HEAD 2>/dev/null || echo main)
+    git pull --rebase origin "$DEFAULT_BRANCH" 2>/dev/null || true
 
-      if [ ! -f "$STATUS_FILE" ]; then
-        log_info "未找到 sprint-status.yaml，进入 BMAD 规划模式..."
-        run_bmad_planning
-        exit 0
-      fi
-
-      # 找第一个 ready-for-dev story 的 id（兼容列表格式 YAML）
-      # 先找 "status: ready-for-dev" 所在行号，再向上找最近的 "id:" 字段
-      STATUS_LINE=$(grep -n 'status:\s*ready-for-dev' "$STATUS_FILE" | head -1 | cut -d: -f1 || true)
-      STORY_KEY=""
-      if [ -n "$STATUS_LINE" ]; then
-        STORY_KEY=$(head -n "$STATUS_LINE" "$STATUS_FILE" \
-                    | grep 'id:' | tail -1 \
-                    | sed 's/.*id:\s*//' | tr -d '"' | tr -d ' ')
-      fi
-
-      if [ -z "$STORY_KEY" ]; then
-        # 检查是否有 backlog story
-        HAS_BACKLOG=$(grep -c 'status:\s*backlog' "$STATUS_FILE" || true)
-        if [ "$HAS_BACKLOG" -gt 0 ]; then
-          log_info "有 backlog story，运行 create-story 工作流..."
-          run_bmad_create_story
-          exit 0
+    case "$BMAD_PHASE" in
+      discover)
+        if [ ! -f "$STATUS_FILE" ]; then
+          BMAD_PHASE="planning"
         else
-          log_info "所有 story 已完成，进入 BMAD 规划模式..."
-          run_bmad_planning
-          exit 0
-        fi
-      fi
+          # 找第一个 ready-for-dev story
+          STATUS_LINE=$(grep -n 'status:\s*ready-for-dev' "$STATUS_FILE" | head -1 | cut -d: -f1 || true)
+          STORY_KEY=""
+          if [ -n "$STATUS_LINE" ]; then
+            STORY_KEY=$(head -n "$STATUS_LINE" "$STATUS_FILE" \
+                        | grep 'id:' | tail -1 \
+                        | sed 's/.*id:\s*//' | tr -d '"' | tr -d ' ')
+          fi
 
-      # 原子认领：把 status: ready-for-dev → status: in-progress（列表格式）
-      # 定位该 story 块（从 id: STORY_KEY 到下一个 - id:），只改其中的 status 行
-      python3 -c "
+          if [ -n "$STORY_KEY" ]; then
+            BMAD_PHASE="claim"
+          else
+            HAS_BACKLOG=$(grep -c 'status:\s*backlog' "$STATUS_FILE" || true)
+            if [ "$HAS_BACKLOG" -gt 0 ]; then
+              BMAD_PHASE="create-story"
+            else
+              BMAD_PHASE="planning"  # 所有 story 完成，重新规划
+            fi
+          fi
+        fi
+        ;;
+
+      planning)
+        run_bmad_planning
+        BMAD_PHASE="discover"
+        ;;
+
+      create-story)
+        if [ "${READINESS_CHECKED}" != "true" ]; then
+          run_readiness_check
+          READINESS_CHECKED=true
+        fi
+        run_bmad_create_story
+        BMAD_PHASE="discover"
+        ;;
+
+      claim)
+        # 原子认领：status: ready-for-dev → in-progress
+        python3 -c "
 import re, sys
 content = open('${STATUS_FILE}').read()
-# 在 id: STORY_KEY 后最近的 status: ready-for-dev 替换为 in-progress
 pattern = r'(id:\s*${STORY_KEY}.*?status:\s*)ready-for-dev'
 result = re.sub(pattern, r'\1in-progress', content, count=1, flags=re.DOTALL)
 open('${STATUS_FILE}', 'w').write(result)
 "
+        # 找对应 story 文件
+        STORY_FILE_PATH=$(find "$IMPL_DIR" -name "${STORY_KEY}*.md" 2>/dev/null | head -1)
+        if [ -z "$STORY_FILE_PATH" ]; then
+          log_warning "story 文件不存在（${STORY_KEY}），先创建 story..."
+          git checkout "$STATUS_FILE"
+          BMAD_PHASE="create-story"
+          continue
+        fi
 
-      # 找对应 story 文件
-      STORY_FILE_PATH=$(find "$IMPL_DIR" -name "${STORY_KEY}*.md" 2>/dev/null | head -1)
-      if [ -z "$STORY_FILE_PATH" ]; then
-        # story 文件还没创建，先 create-story
-        log_warning "story 文件不存在（${STORY_KEY}），先创建 story..."
-        git checkout "$STATUS_FILE"
-        run_bmad_create_story
-        exit 0
-      fi
+        git add "$STATUS_FILE"
+        git commit -m "chore: claim story ${STORY_KEY} [skip ci]" --no-verify 2>/dev/null
 
-      git add "$STATUS_FILE"
-      git commit -m "chore: claim story ${STORY_KEY} [skip ci]" --no-verify 2>/dev/null
+        if git push origin "$DEFAULT_BRANCH" 2>/dev/null; then
+          export STORY_KEY="$STORY_KEY"
+          export STORY_FILE="$STORY_FILE_PATH"
+          log_success "成功认领 story: $STORY_KEY → $STORY_FILE"
+          BMAD_PHASE="done"
+        else
+          log_warning "push 冲突，回退并重试..."
+          git reset HEAD~1
+          git checkout "$STATUS_FILE"
+          sleep $((PHASE_COUNT * 2))
+          BMAD_PHASE="discover"
+        fi
+        ;;
+    esac
+  done
 
-      if git push origin "$DEFAULT_BRANCH" 2>/dev/null; then
-        export STORY_KEY="$STORY_KEY"
-        export STORY_FILE="$STORY_FILE_PATH"
-        log_success "成功认领 story: $STORY_KEY → $STORY_FILE"
-        CLAIM_SUCCESS=true
-        break
-      else
-        log_warning "push 冲突（attempt $attempt），回退并重试..."
-        git reset HEAD~1
-        git checkout "$STATUS_FILE"
-        sleep $((attempt * 2))
-      fi
-    done
-
-    if [ "$CLAIM_SUCCESS" != "true" ]; then
-      log_error "无法认领 story（$MAX_CLAIM_RETRIES 次后失败）"
-      exit 1
-    fi
+  if [ "$PHASE_COUNT" -ge "$MAX_PHASE_LOOPS" ]; then
+    log_error "BMAD 阶段循环超过 ${MAX_PHASE_LOOPS} 次，异常退出"
+    exit 1
   fi
 
 else
@@ -259,20 +422,16 @@ Story 文件：${STORY_FILE}
 Story Key：${STORY_KEY}
 
 ## 执行步骤
+0. 若 _bmad-output/project-context.md 存在，先阅读了解项目全局上下文
+0.5. 若 _bmad-output/dev-log.md 存在，先阅读了解前序 story 的技术决策
 1. 读取 ${STORY_FILE} 完整内容，理解 Story、Acceptance Criteria、Tasks
 2. 读取 _bmad/bmm/config.yaml 了解项目配置
 3. 读取 _bmad/bmm/workflows/4-implementation/dev-story/workflow.md，完整遵循其工作流指令
-4. 按 workflow 实施 story（TDD、测试、代码审查）
+4. 按 workflow 实施 story（TDD、测试）
 5. 实施完成后：
    - 将 ${STORY_FILE} 中 Status 字段改为 review（或 done，若已通过代码审查）
    - 将 _bmad-output/implementation-artifacts/sprint-status.yaml 中该 story 状态改为 review
-6. 输出 review_result.json（格式如下）
-7. 最后输出 PIPELINE_COMPLETE
-
-## review_result.json 格式
-{\"task_id\": \"${STORY_KEY}\", \"title\": \"<story 标题>\", \"verdict\": \"pass|fail\", \"score\": 0-100, \"summary\": \"一两句话总结\", \"issues\": [{\"severity\": \"high|medium|low\", \"category\": \"correctness|security|performance|maintainability\", \"file\": \"路径\", \"line\": 行号, \"description\": \"问题\", \"suggestion\": \"建议\"}], \"strengths\": [\"做得好的地方\"], \"recommendation\": \"approve|request_changes\"}
-
-verdict 规则：有任何 high severity 问题则为 fail，否则为 pass。"
+6. 最后输出 PIPELINE_COMPLETE"
 
 else
   # ── 非 BMAD 模式：保留现有通用 prompt ────────────────────────
@@ -343,17 +502,9 @@ ${TASK_HINT}
 1. 开始修复前：gh issue comment <issue_number> --body '正在处理此 issue，将在本次 PR 中修复。'
 2. 修复完成后：gh issue close <issue_number> --comment '已修复，见本 PR。'
 
-### 第五步：代码审查并输出报告
+### 第五步：完成
 
-将审查结果写入 /workspace/review_result.json：
-
-{\"task_id\": \"<你完成的任务ID>\", \"title\": \"<任务标题>\", \"verdict\": \"pass|fail\", \"score\": 0-100, \"summary\": \"一两句话总结\", \"issues\": [{\"severity\": \"high|medium|low\", \"category\": \"correctness|security|performance|maintainability\", \"file\": \"路径\", \"line\": 行号, \"description\": \"问题\", \"suggestion\": \"建议\"}], \"strengths\": [\"做得好的地方\"], \"recommendation\": \"approve|request_changes\"}
-
-verdict 规则：有任何 high severity 问题则为 fail，否则为 pass。
-
----
-
-完成所有五步后，输出 PIPELINE_COMPLETE。"
+完成所有实施和测试后，输出 PIPELINE_COMPLETE。"
 fi
 
 log_info "启动 Claude 自主执行..."
@@ -362,13 +513,25 @@ claude \
         --dangerously-skip-permissions \
         --print \
         --verbose \
-        <<< "${PROMPT}"
-if [ $? -ne 0 ]; then
+        --output-format stream-json \
+        <<< "${PROMPT}" 2>&1 | _fmt_stream
+if [ "${PIPESTATUS[0]}" -ne 0 ]; then
     log_error "Claude 执行超时或失败"
     exit 2
 fi
 
 log_success "Claude 自主执行完成"
+
+# ── 步骤 2.5: dev-log + 独立审查 ─────────────────────────────────
+
+# Opt6: BMAD story 完成后追加开发日志
+if [ "$IS_BMAD" = "true" ] && [ -n "${STORY_KEY:-}" ]; then
+    append_dev_log "$STORY_KEY"
+fi
+
+# Opt2: 独立代码审查（独立 Claude 调用，不复用实现上下文）
+REVIEW_TASK_ID="${STORY_KEY:-${TASK_ID:-unknown}}"
+run_independent_review "$REVIEW_TASK_ID"
 
 # ── 步骤 3: 提交 + 推送 + PR ────────────────────────────────────────
 
@@ -423,6 +586,14 @@ if [ -n "${GIT_TOKEN:-}" ]; then
     fi
 else
     log_warning "GIT_TOKEN 未设置，跳过推送"
+fi
+
+# ── 步骤 4: PR 反馈循环 ──────────────────────────────────────────
+
+PR_URL_FILE="/workspace/pr_url.txt"
+if [ -f "$PR_URL_FILE" ]; then
+    PR_NUM=$(basename "$(cat "$PR_URL_FILE")")
+    run_pr_feedback_loop "$PR_NUM" 2
 fi
 
 log_section "流水线完成 ✓"
