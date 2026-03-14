@@ -184,7 +184,11 @@ run_readiness_check() {
 run_independent_review() {
   local task_id="$1"
   log_section "步骤 2.5: 独立代码审查"
-  REVIEW_PROMPT="你是一名独立代码审查员，对实现过程一无所知，只看结果。
+  REVIEW_PROMPT="重要：你是这段代码的第一个也是唯一的读者，你对实现过程一无所知。
+禁止使用「根据上下文我猜测作者的意图」等表述。
+只根据代码本身（diff + story 验收标准）进行评判，不得引用任何会话历史或实现者视角。
+
+你是一名独立代码审查员，对实现过程一无所知，只看结果。
 
 ## 审查范围
 git diff origin/$(git symbolic-ref --short HEAD 2>/dev/null || echo main)...HEAD
@@ -261,6 +265,140 @@ except: print('')
   done
 }
 
+# 等待目标仓库 GitHub Actions 完成（check-runs API 比旧 /status 精确）
+wait_for_branch_ci() {
+  local branch="$1"
+  local max_wait="${2:-600}"
+  local interval=30
+  local elapsed=0
+  local OWNER_REPO
+  OWNER_REPO=$(echo "$REPO_URL" | sed 's|.*github\.com/||;s|\.git$||')
+
+  log_section "等待 GitHub Actions 完成 (branch: ${branch})"
+
+  while [ "$elapsed" -lt "$max_wait" ]; do
+    ci_status=$(python3 -c "
+import urllib.request, json, os
+url = 'https://api.github.com/repos/${OWNER_REPO}/commits/${branch}/check-runs'
+req = urllib.request.Request(url, headers={
+    'Authorization': f'token {os.environ.get(\"GIT_TOKEN\",\"\")}',
+    'Accept': 'application/vnd.github.v3+json',
+    'User-Agent': 'claude-pipeline'
+})
+try:
+    data = json.loads(urllib.request.urlopen(req, timeout=10).read())
+    runs = data.get('check_runs', [])
+    if not runs:
+        print('pending')
+    elif all(r['status'] == 'completed' for r in runs):
+        bad = [r for r in runs if r['conclusion'] not in ('success','skipped','neutral')]
+        print('failure' if bad else 'success')
+    else:
+        print('pending')
+except Exception:
+    print('unknown')
+" 2>/dev/null || echo "unknown")
+
+    log_info "CI 状态: ${ci_status} (${elapsed}s / ${max_wait}s)"
+    case "$ci_status" in
+      success) log_success "GitHub Actions 全部通过"; return 0 ;;
+      failure) log_error "GitHub Actions 失败"; return 1 ;;
+    esac
+    sleep "$interval"
+    elapsed=$((elapsed + interval))
+  done
+
+  log_error "等待 CI 超时 (${max_wait}s)"
+  return 1
+}
+
+# 获取失败 job 摘要（最多 3 个）
+fetch_ci_failure_logs() {
+  local branch="$1"
+  local OWNER_REPO
+  OWNER_REPO=$(echo "$REPO_URL" | sed 's|.*github\.com/||;s|\.git$||')
+
+  python3 -c "
+import urllib.request, json, os
+url = 'https://api.github.com/repos/${OWNER_REPO}/commits/${branch}/check-runs'
+headers = {
+    'Authorization': f'token {os.environ.get(\"GIT_TOKEN\",\"\")}',
+    'Accept': 'application/vnd.github.v3+json',
+    'User-Agent': 'claude-pipeline'
+}
+try:
+    data = json.loads(urllib.request.urlopen(
+        urllib.request.Request(url, headers=headers), timeout=10).read())
+    failed = [r for r in data.get('check_runs',[])
+              if r.get('conclusion') not in ('success','skipped','neutral',None)]
+    summary = []
+    for r in failed[:3]:
+        summary.append(f\"Job: {r.get('name')} | URL: {r.get('html_url')}\")
+    print('\n'.join(summary) if summary else 'No failed jobs found')
+except Exception as e:
+    print(f'Failed to fetch logs: {e}')
+" 2>/dev/null || echo "Unable to fetch CI logs"
+}
+
+
+# CI 全绿后打 tag + 发布 GitHub Release
+create_tag_and_release() {
+  local task_id="$1"
+  local branch="$2"
+  local timestamp
+  timestamp=$(date -u +%Y%m%d-%H%M%S)
+  local tag_name="task-${task_id}-${timestamp}"
+  local OWNER_REPO
+  OWNER_REPO=$(echo "$REPO_URL" | sed 's|.*github\.com/||;s|\.git$||')
+
+  log_section "创建 Tag 和 GitHub Release"
+
+  local pr_title pr_summary pr_url=""
+  pr_title=$(python3 -c "
+import json, pathlib
+p = pathlib.Path('/workspace/review_result.json')
+print(json.loads(p.read_text()).get('title','Task ${task_id}') if p.exists() else 'Task ${task_id}')
+" 2>/dev/null || echo "Task ${task_id}")
+  pr_summary=$(python3 -c "
+import json, pathlib
+p = pathlib.Path('/workspace/review_result.json')
+print(json.loads(p.read_text()).get('summary','') if p.exists() else '')
+" 2>/dev/null || echo "")
+  [ -f "/workspace/pr_url.txt" ] && pr_url=$(cat /workspace/pr_url.txt)
+
+  git tag -a "$tag_name" -m "Task ${task_id}: ${pr_title}" 2>/dev/null || true
+  git push origin "$tag_name" 2>/dev/null || { log_warning "tag 推送失败，跳过 release"; return 0; }
+
+  python3 - <<PYEOF
+import urllib.request, json, os
+payload = json.dumps({
+    "tag_name": "${tag_name}",
+    "name": "Task ${task_id}: ${pr_title}",
+    "body": "## Summary\n${pr_summary}\n\n## Pipeline Info\n- Task: ${task_id}\n- Branch: ${branch}\n- PR: ${pr_url}\n\n*Automated by Claude Pipeline*",
+    "draft": False,
+    "prerelease": False
+}).encode()
+req = urllib.request.Request(
+    f"https://api.github.com/repos/${OWNER_REPO}/releases",
+    data=payload,
+    headers={
+        "Authorization": f"token {os.environ.get('GIT_TOKEN','')}",
+        "Content-Type": "application/json",
+        "Accept": "application/vnd.github.v3+json",
+        "User-Agent": "claude-pipeline"
+    },
+    method="POST"
+)
+try:
+    resp = urllib.request.urlopen(req, timeout=15)
+    data = json.loads(resp.read())
+    print(f"Release: {data.get('html_url','')}")
+except Exception as e:
+    print(f"Release 创建失败: {e}")
+PYEOF
+  log_success "Tag ${tag_name} 和 Release 已发布"
+}
+
 # ── 步骤 1.5: 任务发现与认领 ─────────────────────────────────────
 log_section "步骤 1.5: 任务发现与认领"
 
@@ -288,7 +426,7 @@ if [ "$IS_BMAD" = "true" ]; then
         if [ ! -f "$STATUS_FILE" ]; then
           BMAD_PHASE="planning"
         else
-          # 找第一个 ready-for-dev story
+          # ready-for-dev story
           STATUS_LINE=$(grep -n 'status:\s*ready-for-dev' "$STATUS_FILE" | head -1 | cut -d: -f1 || true)
           STORY_KEY=""
           if [ -n "$STATUS_LINE" ]; then
@@ -344,20 +482,13 @@ open('${STATUS_FILE}', 'w').write(result)
 
         git add "$STATUS_FILE"
         git commit -m "chore: claim story ${STORY_KEY} [skip ci]" --no-verify 2>/dev/null
-
-        if git push origin "$DEFAULT_BRANCH" 2>/dev/null; then
-          export STORY_KEY="$STORY_KEY"
-          export STORY_FILE="$STORY_FILE_PATH"
-          log_success "成功认领 story: $STORY_KEY → $STORY_FILE"
-          BMAD_PHASE="done"
-        else
-          log_warning "push 冲突，回退并重试..."
-          git reset HEAD~1
-          git checkout "$STATUS_FILE"
-          sleep $((PHASE_COUNT * 2))
-          BMAD_PHASE="discover"
-        fi
+        git push origin "$DEFAULT_BRANCH" 2>/dev/null || log_warning "push 认领标记失败，继续执行"
+        export STORY_KEY="$STORY_KEY"
+        export STORY_FILE="$STORY_FILE_PATH"
+        log_success "认领 story: $STORY_KEY → $STORY_FILE"
+        BMAD_PHASE="done"
         ;;
+
     esac
   done
 
@@ -367,45 +498,30 @@ open('${STATUS_FILE}', 'w').write(result)
   fi
 
 else
-  # ── 非 BMAD 项目：保留原 plan.md 逻辑 ─────────────────────────
+  # ── 非 BMAD 项目：plan.md 逻辑 ─────────────────────────────────
+  TASK_MODE="normal"
+
   if [ -z "${TASK_ID:-}" ]; then
-    MAX_CLAIM_RETRIES=5
-    CLAIM_SUCCESS=false
-    for attempt in $(seq 1 $MAX_CLAIM_RETRIES); do
-      DEFAULT_BRANCH=$(git symbolic-ref --short HEAD 2>/dev/null || echo main)
-      git pull --rebase origin "$DEFAULT_BRANCH" 2>/dev/null || true
+    DEFAULT_BRANCH=$(git symbolic-ref --short HEAD 2>/dev/null || echo main)
+    git pull --rebase origin "$DEFAULT_BRANCH" 2>/dev/null || true
 
-      TASK_LINE=$(grep -n '^\- \[ \]' plan.md 2>/dev/null | head -1)
-      if [ -z "$TASK_LINE" ]; then
-        log_info "plan.md 中没有待处理任务（[ ]），容器正常退出"
-        exit 0
-      fi
+    TASK_LINE=$(grep -n '^\- \[ \]' plan.md 2>/dev/null | head -1)
 
-      LINE_NUM=$(echo "$TASK_LINE" | cut -d: -f1)
-      RAW_ID=$(echo "$TASK_LINE" | grep -oP 'id:\K\w+' || true)
-      [ -z "$RAW_ID" ] && RAW_ID=$(echo "$TASK_LINE" | md5sum | cut -c1-8)
-
-      sed -i "${LINE_NUM}s/^\- \[ \]/- [-]/" plan.md
-      git add plan.md
-      git commit -m "chore: claim task ${RAW_ID} [skip ci]" --no-verify 2>/dev/null
-
-      if git push origin "$DEFAULT_BRANCH" 2>/dev/null; then
-        export TASK_ID="$RAW_ID"
-        log_success "成功抢占任务: $TASK_ID"
-        CLAIM_SUCCESS=true
-        break
-      else
-        log_warning "push 冲突（attempt $attempt），回退并重试..."
-        git reset HEAD~1
-        git checkout plan.md
-        sleep $((attempt * 2))
-      fi
-    done
-
-    if [ "$CLAIM_SUCCESS" != "true" ]; then
-      log_error "无法抢占任务（$MAX_CLAIM_RETRIES 次重试后失败）"
-      exit 1
+    if [ -z "$TASK_LINE" ]; then
+      log_info "plan.md 中没有待处理任务，容器正常退出"
+      exit 0
     fi
+
+    LINE_NUM=$(echo "$TASK_LINE" | cut -d: -f1)
+    RAW_ID=$(echo "$TASK_LINE" | grep -oP 'id:\K\w+' || true)
+    [ -z "$RAW_ID" ] && RAW_ID=$(echo "$TASK_LINE" | md5sum | cut -c1-8)
+
+    sed -i "${LINE_NUM}s/^\- \[ \]/- [-]/" plan.md
+    git add plan.md
+    git commit -m "chore: claim task ${RAW_ID} [skip ci]" --no-verify 2>/dev/null
+    git push origin "$DEFAULT_BRANCH" 2>/dev/null || log_warning "push 认领标记失败，继续执行"
+    export TASK_ID="$RAW_ID"
+    log_success "认领任务: $TASK_ID"
   fi
 fi
 
@@ -586,6 +702,35 @@ if [ -n "${GIT_TOKEN:-}" ]; then
     fi
 else
     log_warning "GIT_TOKEN 未设置，跳过推送"
+    SHOULD_PUSH=0
+fi
+
+# ── 步骤 3.5: 等待 CI 结果 → 发布 Release 或持久化失败状态 ────────
+
+if [ -n "${GIT_TOKEN:-}" ] && [ "${SHOULD_PUSH:-0}" -eq 1 ]; then
+    RELEASE_TASK_ID="${STORY_KEY:-${TASK_ID:-unknown}}"
+
+    if wait_for_branch_ci "${CURRENT_BRANCH}" 600; then
+        # CI 全绿 → 打 tag + 发布 GitHub Release
+        create_tag_and_release "$RELEASE_TASK_ID" "$CURRENT_BRANCH"
+    else
+        # CI 失败 → 获取日志 → 内联修复
+        CI_LOGS=$(fetch_ci_failure_logs "${CURRENT_BRANCH}")
+        log_warning "CI 失败，启动内联修复..."
+        CI_FIX_PROMPT="CI 检查失败。任务：${RELEASE_TASK_ID}。失败信息：
+${CI_LOGS}
+
+请：
+1. 用 gh run list / gh run view 获取完整 CI 日志
+2. 分析根因
+3. 修复代码
+4. git add -A && git commit -m 'fix: ci failure for ${RELEASE_TASK_ID}'
+5. git push origin ${CURRENT_BRANCH}
+输出 FIX_COMPLETE。"
+        claude --dangerously-skip-permissions --print --verbose \
+            --output-format stream-json <<< "$CI_FIX_PROMPT" 2>&1 | _fmt_stream
+        [ "${PIPESTATUS[0]}" -ne 0 ] && log_warning "CI 修复调用失败，继续流程"
+    fi
 fi
 
 # ── 步骤 4: PR 反馈循环 ──────────────────────────────────────────

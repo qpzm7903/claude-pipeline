@@ -30,7 +30,7 @@ def test_entrypoint_prompt():
         ("grep -n",               "扫描待处理任务"),
         ("sed -i",               "标记任务为 [-]"),
         ("git push",             "push 作为分布式锁"),
-        ("CLAIM_SUCCESS",        "抢占结果检查"),
+        ("log_success \"认领",   "认领成功日志"),
         ("步骤 2: Claude 自主执行", "Claude 执行步骤"),
         ("PIPELINE_COMPLETE",   "完成标志"),
         ("IS_BMAD",              "BMAD 项目检测"),
@@ -197,7 +197,7 @@ def test_k8s_manifests():
 
         # 检查关键字段
         key_fields = [
-            ("concurrencyPolicy: Allow", "并发策略"),
+            ("concurrencyPolicy: Forbid", "并发策略（单容器串行）"),
             ("backoffLimit: 0",          "失败不重试"),
             ("restartPolicy: Never",     "不重启"),
             ("activeDeadlineSeconds",    "超时设置"),

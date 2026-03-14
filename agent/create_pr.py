@@ -85,6 +85,11 @@ def create_pr():
     # 确定 base branch（默认 main，也检查 master）
     base_branch = detect_default_branch(owner_repo, github_token) or "main"
 
+    # 主干开发模式：直接推送到默认分支，无需 PR
+    if branch_name == base_branch:
+        print(f"[create_pr] 直接推送到 {base_branch}，跳过 PR 创建（主干开发模式）")
+        return
+
     # 调用 GitHub API 创建 PR
     api_url = f"https://api.github.com/repos/{owner_repo}/pulls"
     payload = {
