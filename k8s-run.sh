@@ -112,7 +112,20 @@ case "${1:-}" in
     fi
     echo "=== Pod: ${TARGET_POD} ==="
     # shellcheck disable=SC2086
-    kubectl logs -n "${NAMESPACE}" "${TARGET_POD}" ${FOLLOW}
+    if ! kubectl logs -n "${NAMESPACE}" "${TARGET_POD}" ${FOLLOW} 2>/dev/null; then
+      echo "⚠️  kubectl logs 不可用（Docker Desktop GC），尝试: ./k8s-run.sh --logs-history"
+    fi
+    ;;
+
+  --logs-history)
+    # 从 cargo-cache PVC 读取持久化日志（绕过 Docker Desktop GC 问题）
+    shift
+    N="${1:-1}"  # 默认显示最近 1 个日志文件
+    echo "=== 从 PVC 读取最近 ${N} 个历史日志 ==="
+    kubectl run "log-reader-$$" -n "${NAMESPACE}" --rm -i --restart=Never \
+      --image=busybox \
+      --overrides='{"spec":{"volumes":[{"name":"cargo","persistentVolumeClaim":{"claimName":"cargo-registry-cache"}}],"containers":[{"name":"reader","image":"busybox","command":["sh","-c","ls -t /cargo/pipeline-logs/*.log 2>/dev/null | head -'"${N}"' | while read f; do echo \"=== $f ===\"; cat \"$f\"; done"],"volumeMounts":[{"name":"cargo","mountPath":"/cargo"}]}]}}' \
+      2>/dev/null || echo "❌ 无法读取 PVC 日志（PVC 可能不包含日志）"
     ;;
 
   --update-secret)
