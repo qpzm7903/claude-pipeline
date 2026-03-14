@@ -8,7 +8,9 @@
 #   ./k8s-run.sh --update-secret                    # 用当前 .env 更新 K8s Secret
 #   ./k8s-run.sh --status                           # 查看 CronJob、Job、Pod 状态
 #   ./k8s-run.sh --delete                           # 删除所有 CronJob
-#   ./k8s-run.sh --logs                             # 查看最近 Pod 的日志
+#   ./k8s-run.sh --logs                             # 查看最近 Pod 的完整日志
+#   ./k8s-run.sh --logs -f                          # 实时跟踪最近 Pod 的日志
+#   ./k8s-run.sh --logs <pod-name>                  # 查看指定 Pod 的日志
 #
 # 前置条件:
 #   1. kubectl 已配置并连接到目标集群
@@ -88,15 +90,29 @@ case "${1:-}" in
     ;;
 
   --logs)
-    POD=$(kubectl get pods -n "${NAMESPACE}" \
-      --sort-by=.metadata.creationTimestamp \
-      -o jsonpath='{.items[-1:].metadata.name}' 2>/dev/null || echo "")
-    if [ -z "${POD}" ]; then
+    shift
+    FOLLOW=""
+    TARGET_POD=""
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        -f|--follow) FOLLOW="-f"; shift ;;
+        *)           TARGET_POD="$1"; shift ;;
+      esac
+    done
+
+    if [ -z "${TARGET_POD}" ]; then
+      TARGET_POD=$(kubectl get pods -n "${NAMESPACE}" \
+        --sort-by=.metadata.creationTimestamp \
+        -o jsonpath='{.items[-1:].metadata.name}' 2>/dev/null || echo "")
+    fi
+
+    if [ -z "${TARGET_POD}" ]; then
       echo "❌ 没有找到 Pod"
       exit 1
     fi
-    echo "=== Pod: ${POD} ==="
-    kubectl logs -n "${NAMESPACE}" "${POD}" --tail=100
+    echo "=== Pod: ${TARGET_POD} ==="
+    # shellcheck disable=SC2086
+    kubectl logs -n "${NAMESPACE}" "${TARGET_POD}" ${FOLLOW}
     ;;
 
   --update-secret)
