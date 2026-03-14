@@ -106,6 +106,7 @@ def render_template(repo_url: str, cfg: dict) -> str:
         "{ANTHROPIC_BASE_URL}": base_url,
         "{GIT_AUTHOR_NAME}": git_cfg.get("author_name", "Claude Pipeline Bot"),
         "{GIT_AUTHOR_EMAIL}": git_cfg.get("author_email", "pipeline@claude.ai"),
+        "{JOB_DEADLINE}": str(k8s_cfg.get("job_deadline_seconds", 7200)),
     }
 
     result = template

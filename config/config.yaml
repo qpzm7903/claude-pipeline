@@ -21,3 +21,4 @@ kubernetes:
   schedule: "*/10 * * * *"      # CronJob 触发频率（每10分钟）
   image_pull_policy: "Never"    # Never=本地镜像; IfNotPresent/Always=远端镜像
   namespace: "claude-pipeline"
+  job_deadline_seconds: 7200    # Job 最大运行时间（秒）；BMAD 一次完整循环最长约 90 分钟

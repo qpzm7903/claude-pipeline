@@ -15,7 +15,7 @@ spec:
   jobTemplate:
     spec:
       backoffLimit: 0
-      activeDeadlineSeconds: 2400
+      activeDeadlineSeconds: {JOB_DEADLINE}
       ttlSecondsAfterFinished: 3600
       template:
         metadata:
