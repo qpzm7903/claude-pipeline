@@ -16,7 +16,6 @@ from pathlib import Path
 def create_pr():
     # 从环境变量读取配置
     task_id = os.environ.get("TASK_ID", "unknown")
-    task_title = os.environ.get("TASK_TITLE", "Unknown Task")
     repo_url = os.environ.get("REPO_URL", "")
     branch_name = os.environ.get("BRANCH_NAME", f"task/{task_id}")
     github_token = os.environ.get("GIT_TOKEN") or os.environ.get("GITHUB_TOKEN", "")
@@ -40,6 +39,9 @@ def create_pr():
         except json.JSONDecodeError:
             pass
 
+    # task_id / title 优先从 review_result.json 读取（Claude 自主发现后填入）
+    task_id = review_result.get("task_id", task_id)
+    task_title = review_result.get("title", task_id)
     verdict = review_result.get("verdict", "unknown")
     score = review_result.get("score", 0)
     summary = review_result.get("summary", "")
