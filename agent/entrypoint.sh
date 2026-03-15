@@ -812,13 +812,19 @@ if [ "$IS_BMAD" = "true" ]; then
    - 遵循 TDD，先写测试再写实现
    - 只修改与该 task 直接相关的代码
    - **Rust 测试注意**：若 Cargo.toml 含屏幕捕获依赖（xcap/pipewire/libspa），直接用 \`cargo test --no-default-features\`，禁止先跑默认 features 再因报错重试
-4. 实施完成后：
+4. 更新 story 文件状态：
    a. 将 ${STORY_FILE} 中该 task 的 [-] 改为 [x]
    b. 检查 ${STORY_FILE} 中是否还有 [ ] 未做 task：
       - 若还有未做 task：不修改 story Status，不修改 sprint-status.yaml
       - 若所有 task 均已 [x]：将 Status 改为 review，并将 sprint-status.yaml 中该 story 状态改为 review
-   c. git add -A && git commit（根据本次实际变更写简洁有意义的 commit message，遵循 Conventional Commits 规范）
-5. 最后输出 PIPELINE_COMPLETE"
+5. **【必须执行，不可跳过】提交代码**：
+   \`\`\`
+   git add -A
+   git commit -m \"<type>(<scope>): <简洁描述本次实际变更>\"
+   \`\`\`
+   遵循 Conventional Commits 规范（feat/fix/chore/test/docs 等）。
+   若跳过此步骤，pipeline 日志将记录 'Claude 未自行提交' 警告，请务必执行。
+6. 最后输出 PIPELINE_COMPLETE"
 
 else
   # ── 非 BMAD 模式：保留现有通用 prompt ────────────────────────
