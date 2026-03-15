@@ -6,11 +6,10 @@
 FROM claude-pipeline-base:latest
 
 USER root
-COPY --chown=pipeline:pipeline create_pr.py /agent/create_pr.py
 COPY --chown=pipeline:pipeline entrypoint.sh /agent/entrypoint.sh
 RUN chmod +x /agent/entrypoint.sh
 
-RUN mkdir -p /home/pipeline/.claude
+RUN mkdir -p /home/pipeline/.claude && chown pipeline:pipeline /home/pipeline/.claude
 COPY --chown=pipeline:pipeline container-CLAUDE.md /home/pipeline/.claude/CLAUDE.md
 
 USER pipeline

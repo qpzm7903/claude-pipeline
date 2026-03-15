@@ -28,18 +28,13 @@ def test_entrypoint_prompt():
         ("步骤 0: 环境检查",         "环境检查步骤"),
         ("步骤 1: 克隆仓库",         "克隆仓库步骤"),
         ("步骤 2: Claude 自主执行",   "Claude 执行步骤"),
-        ("步骤 3: 推送代码",         "推送代码步骤"),
         ("git clone",               "克隆命令"),
-        ("git push",                "推送命令"),
         ("claude",                  "Claude CLI 调用"),
         ("stream-json",             "stream-json 输出格式"),
         ("_fmt_stream",             "格式化函数"),
         ("ANTHROPIC_API_KEY",       "API key 检查"),
         ("REPO_URL",                "仓库 URL 变量"),
-        ("git add -A",              "兜底 git add"),
-        ("git commit",              "兜底 git commit"),
         ("CLAUDE.md",               "CLAUDE.md 引用"),
-        ("create_pr.py",            "PR 创建脚本引用"),
     ]
 
     all_ok = True
