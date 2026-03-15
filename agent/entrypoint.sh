@@ -76,8 +76,8 @@ log_success "克隆完成"
 cat > /tmp/fmt_stream.py << 'PYEOF'
 import sys, json
 
-TEXT_LIMIT    = 300
-CONTENT_LINES = 20
+TEXT_LIMIT    = 500   # PVC 日志不受终端宽度限制，适当加长
+CONTENT_LINES = 30
 
 def p(s):
     print(s, flush=True)
@@ -204,9 +204,13 @@ for raw in sys.stdin:
     # 其他事件：静默丢弃
 PYEOF
 
-# 格式化 claude stream-json 输出（管道 stdin 专用于 claude 数据）
+# 格式化 claude stream-json 输出，同时写入 PVC 日志文件
+# 用 while read 双写而非 tee -a，避免写入失败触发 SIGPIPE 杀上游 claude 进程
 _fmt_stream() {
-  python3 -u /tmp/fmt_stream.py 2>&1
+  python3 -u /tmp/fmt_stream.py 2>&1 | while IFS= read -r _fmtline; do
+    echo "$_fmtline"
+    echo "$_fmtline" >> "${_LOG_FILE:-/dev/null}" 2>/dev/null || true
+  done
 }
 
 # BMAD 规划阶段：生成 PRD / architecture / sprint-status.yaml + project-context.md
