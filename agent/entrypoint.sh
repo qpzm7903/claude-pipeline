@@ -811,7 +811,7 @@ if [ "$IS_BMAD" = "true" ]; then
 3. 实施当前 task：${TASK_DESC}
    - 遵循 TDD，先写测试再写实现
    - 只修改与该 task 直接相关的代码
-   - **Rust 测试注意**：若 Cargo.toml 含屏幕捕获依赖（xcap/pipewire/libspa），直接用 \`cargo test --no-default-features\`，禁止先跑默认 features 再因报错重试
+   - **Rust 测试注意**：若 Cargo.toml 含屏幕捕获依赖（xcap/pipewire/libspa），只允许 \`cargo test --no-default-features\`。**严禁** \`--features screenshot\`、\`--all-features\` 等任何包含屏幕捕获 feature 的命令——容器无 libspa/pipewire，必定编译失败。\`#[cfg(feature = "screenshot")]\` 门控的测试无法运行，接受此限制。
 4. 更新 story 文件状态：
    a. 将 ${STORY_FILE} 中该 task 的 [-] 改为 [x]
    b. 检查 ${STORY_FILE} 中是否还有 [ ] 未做 task：

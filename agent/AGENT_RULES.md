@@ -109,8 +109,10 @@ Claude 执行完毕后，**必须**在最后一行输出以下信号之一，且
 ### Rust 测试已知问题（直接跳过，勿重复尝试）
 
 - 若项目含屏幕捕获相关 feature（如 `libpipewire`/`libspa`），直接用 `cargo test --no-default-features` 跑单元测试。
+- **禁止**任何形式的 `cargo test --features screenshot`、`cargo test --features xcap`、`cargo test --all-features` 等包含屏幕捕获 feature 的命令——容器无 libspa/pipewire 系统库，**必定编译失败**，浪费 2-5 分钟。
 - **禁止先跑** `cargo test`（默认 features）再因报错重试——这会浪费 ~2 分钟编译时间。
 - 判断依据：`Cargo.toml` 中存在 `xcap`、`pipewire`、`libspa` 等屏幕捕获依赖即适用本规则。
+- `#[cfg(feature = "screenshot")]` 门控的测试无法在本环境运行，**接受该限制，不要尝试绕过**。
 
 ---
 

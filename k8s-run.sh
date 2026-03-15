@@ -122,9 +122,10 @@ case "${1:-}" in
     shift
     N="${1:-1}"  # 默认显示最近 1 个日志文件
     echo "=== 从 PVC 读取最近 ${N} 个历史日志 ==="
+    # 用 python3 镜像替代 busybox sh glob，避免 JSON 转义和 glob 展开问题
     kubectl run "log-reader-$$" -n "${NAMESPACE}" --rm -i --restart=Never \
-      --image=busybox \
-      --overrides='{"spec":{"volumes":[{"name":"cargo","persistentVolumeClaim":{"claimName":"cargo-registry-cache"}}],"containers":[{"name":"reader","image":"busybox","command":["sh","-c","ls -t /cargo/pipeline-logs/*.log 2>/dev/null | head -'"${N}"' | while read f; do echo \"=== $f ===\"; cat \"$f\"; done"],"volumeMounts":[{"name":"cargo","mountPath":"/cargo"}]}]}}' \
+      --image=python:3.11-alpine \
+      --overrides="{\"spec\":{\"volumes\":[{\"name\":\"cargo\",\"persistentVolumeClaim\":{\"claimName\":\"cargo-registry-cache\"}}],\"containers\":[{\"name\":\"reader\",\"image\":\"python:3.11-alpine\",\"command\":[\"python3\",\"-c\",\"import os,sys;d='/cargo/pipeline-logs';files=sorted([os.path.join(d,f) for f in os.listdir(d) if f.endswith('.log') and f not in ('test.log','probe.log')],key=os.path.getmtime,reverse=True)[:${N}];[print(f'=== {f} ===') or print(open(f).read()) for f in files]\"],\"volumeMounts\":[{\"name\":\"cargo\",\"mountPath\":\"/cargo\"}]}]}}" \
       2>/dev/null || echo "❌ 无法读取 PVC 日志（PVC 可能不包含日志）"
     ;;
 
