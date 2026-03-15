@@ -11,6 +11,9 @@
 
 set -euo pipefail
 
+# ── 环境配置 ────────────────────────────────────────────────────────
+export ENABLE_LSP_TOOL=1
+
 # ── 日志持久化：双写到 cargo-cache PVC ──────────────────────────────
 _LOG_DIR="/home/pipeline/.cargo/registry/pipeline-logs"
 _LOG_FILE="/dev/null"
@@ -42,6 +45,7 @@ log_section "步骤 0: 环境检查"
 [ -z "${ANTHROPIC_API_KEY:-}" ] && { log_error "ANTHROPIC_API_KEY 未设置"; exit 1; }
 [ -z "${REPO_URL:-}" ]          && { log_error "REPO_URL 未设置"; exit 1; }
 command -v claude &>/dev/null   || { log_error "claude CLI 未安装"; exit 1; }
+
 log_success "环境检查通过"
 
 # ── 步骤 1: 克隆仓库 ────────────────────────────────────────────────
@@ -73,8 +77,15 @@ log_success "克隆完成"
 cat > /tmp/fmt_stream.py << 'PYEOF'
 import sys, json
 
-TEXT_LIMIT    = 500
-CONTENT_LINES = 30
+TEXT_LIMIT    = 1000
+CONTENT_LINES = 50
+
+# Colors for terminal output
+C_THOUGHT = '\033[1;35m'
+C_ACTION  = '\033[1;36m'
+C_RESULT  = '\033[1;32m'
+C_INFO    = '\033[1;34m'
+C_RESET   = '\033[0m'
 
 def p(s):
     print(s, flush=True)
@@ -93,7 +104,7 @@ for raw in sys.stdin:
 
     if t == 'system':
         if obj.get('subtype') == 'init':
-            p('  [session] model=' + str(obj.get('model','')) + '  cwd=' + str(obj.get('cwd','')))
+            p(f"{C_INFO}🚀 [初始化 Init] model={obj.get('model','')} cwd={obj.get('cwd','')}{C_RESET}")
         continue
 
     if t == 'assistant':
@@ -104,70 +115,76 @@ for raw in sys.stdin:
                 if not text:
                     continue
                 if len(text) > TEXT_LIMIT:
-                    text = text[:TEXT_LIMIT] + ' ...'
+                    text = text[:TEXT_LIMIT] + ' ... (truncated)'
+                p(f"\n{C_THOUGHT}🧠 [思考 Thought]{C_RESET}")
                 for ln in text.splitlines():
                     if ln.strip():
-                        p('  * ' + ln)
+                        p('    ' + ln)
             elif bt == 'tool_use':
                 name = block.get('name', '')
                 inp  = block.get('input', {})
+                p(f"\n{C_ACTION}🛠️  [行动 Action]: {name}{C_RESET}")
                 if name == 'Bash':
-                    cmd = inp.get('command', '').replace('\n', '; ')[:160]
-                    p('  > Bash    ' + cmd)
+                    cmd = inp.get('command', '').replace('\n', '; ')[:200]
+                    p('    $ ' + cmd)
                 elif name == 'Read':
                     fp     = inp.get('file_path', '')
                     offset = inp.get('offset', '')
                     lim    = inp.get('limit', '')
-                    rng    = ('  L' + str(offset) + '+' + str(lim)) if offset else ''
-                    p('  > Read    ' + fp + rng)
+                    rng    = (' L' + str(offset) + '+' + str(lim)) if offset else ''
+                    p('    📄 ' + fp + rng)
                 elif name == 'Write':
-                    p('  > Write   ' + inp.get('file_path', ''))
+                    p('    ✏️  ' + inp.get('file_path', ''))
                 elif name == 'Edit':
-                    p('  > Edit    ' + inp.get('file_path', ''))
+                    p('    📝 ' + inp.get('file_path', ''))
                 elif name == 'Glob':
-                    p('  > Glob    ' + inp.get('pattern', ''))
+                    p('    🔍 ' + inp.get('pattern', ''))
                 elif name == 'Grep':
-                    p('  > Grep    ' + inp.get('pattern', '') + '  @ ' + inp.get('path', '.'))
-                elif name == 'TodoWrite':
-                    p('  > Todo    ' + str(len(inp.get('todos', []))) + ' tasks')
+                    p('    🔎 ' + inp.get('pattern', '') + '  @ ' + inp.get('path', '.'))
+                elif name in ('TodoWrite', 'TodoRead'):
+                    p('    📋 ' + str(len(inp.get('todos', []))) + ' tasks')
                 else:
-                    p('  > ' + name)
+                    p('    ▶ ' + str(inp)[:100])
         continue
 
     tr = obj.get('tool_use_result') or (obj if t == 'tool_result' else None)
     if tr is not None:
+        p(f"{C_RESULT}✅ [结果 Result]{C_RESET}")
         if isinstance(tr, dict):
             stdout  = tr.get('stdout', '')
             stderr  = tr.get('stderr', '')
             content = tr.get('content', '')
             if stdout:
-                for ln in stdout.rstrip().splitlines():
-                    p('  | ' + ln)
+                lines = stdout.rstrip().splitlines()
+                for ln in lines[:15]:
+                    p('    | ' + ln)
+                if len(lines) > 15:
+                    p('    | ... (' + str(len(lines) - 15) + ' more lines)')
             if stderr and str(tr.get('exitCode', '0')) != '0':
                 for ln in stderr.rstrip().splitlines()[:5]:
-                    p('  ! ' + ln)
+                    p('    ! ' + ln)
             if content and not stdout:
                 lines = content.splitlines()
                 for ln in lines[:CONTENT_LINES]:
-                    p('  | ' + ln)
+                    p('    | ' + ln)
                 if len(lines) > CONTENT_LINES:
-                    p('  | ... (' + str(len(lines) - CONTENT_LINES) + ' more lines)')
+                    p('    | ... (' + str(len(lines) - CONTENT_LINES) + ' more lines)')
             parts = []
             for k in ('numLines', 'totalLines', 'numFiles', 'durationMs', 'truncated', 'exitCode'):
                 if k in tr:
                     parts.append(k + '=' + str(tr[k]))
             if parts:
-                p('  < ' + ', '.join(parts))
+                p('    └─ ' + ', '.join(parts))
         elif isinstance(tr, list):
             for item in tr[:3]:
-                p('  | ' + str(item)[:120])
+                p('    | ' + str(item)[:120])
             if len(tr) > 3:
-                p('  | ... (' + str(len(tr) - 3) + ' more)')
+                p('    | ... (' + str(len(tr) - 3) + ' more)')
         else:
             text = str(tr).strip()
             if text:
                 for ln in text.splitlines()[:10]:
-                    p('  | ' + ln)
+                    p('    | ' + ln)
         continue
 
     if 'content' in obj or 'tool_use_result' in obj:
@@ -176,13 +193,13 @@ for raw in sys.stdin:
         if isinstance(content, str) and content.strip():
             lines = content.splitlines()
             for ln in lines[:CONTENT_LINES]:
-                p('  | ' + ln)
+                p('    | ' + ln)
             if len(lines) > CONTENT_LINES:
-                p('  | ... (' + str(len(lines) - CONTENT_LINES) + ' more lines)')
+                p('    | ... (' + str(len(lines) - CONTENT_LINES) + ' more lines)')
         elif file_obj:
             fp  = file_obj.get('filePath', '')
             nln = file_obj.get('numLines', '?')
-            p('  < file: ' + fp + '  (' + str(nln) + ' lines)')
+            p('    < file: ' + fp + '  (' + str(nln) + ' lines)')
         continue
 
     if t == 'result':
@@ -190,7 +207,7 @@ for raw in sys.stdin:
         turns    = obj.get('num_turns', 0)
         duration = (obj.get('duration_ms', 0) or 0) // 1000
         subtype  = obj.get('subtype', '')
-        p('  [done] ' + subtype + '  turns=' + str(turns) + '  cost=$' + '{:.4f}'.format(cost) + '  ' + str(duration) + 's')
+        p(f"{C_INFO}🏁 [结束 DONE] {subtype} turns={turns} cost=${cost:.4f} {duration}s{C_RESET}")
         continue
 PYEOF
 

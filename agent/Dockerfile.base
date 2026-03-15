@@ -14,6 +14,7 @@ FROM ubuntu:22.04
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 ENV NODE_VERSION=20
+ENV ENABLE_LSP_TOOL=1
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
@@ -87,7 +88,12 @@ RUN useradd -m -s /bin/bash pipeline && \
 USER pipeline
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
         | sh -s -- -y --default-toolchain stable --profile minimal && \
-    /home/pipeline/.cargo/bin/rustup component add clippy rustfmt
+    /home/pipeline/.cargo/bin/rustup component add clippy rustfmt rust-analyzer
+
+# ── 8. 安装 Claude 插件 ─────────────────────────────────────────────
+RUN mkdir -p /home/pipeline/.claude && \
+    claude plugin marketplace add https://github.com/anthropics/claude-plugins-official && \
+    claude plugin install rust-analyzer-lsp
 
 # 将 cargo bin 加入 PATH，对所有后续 RUN 和容器运行时均生效
 ENV PATH="/home/pipeline/.cargo/bin:${PATH}"
