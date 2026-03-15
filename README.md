@@ -64,17 +64,56 @@ docker build -t claude-pipeline-agent:latest ./agent/
 
 #### Docker 模式（单次执行）
 
+你可以通过提供环境变量和执行 `./run.sh` 来启动单次运行任务。`./run.sh` 脚本实质上是对 `docker run` 的极简封装。
+
+**可用环境变量配置说明：**
+
+- **API 凭证（必填）**: `ANTHROPIC_API_KEY` 或 `ANTHROPIC_AUTH_TOKEN`。
+- **Git 凭证（必填）**: `GIT_TOKEN`、`GITHUB_TOKEN` 或 `GH_TOKEN`，用于克隆与推送代码。
+- **自定义模型（可选）**: `ANTHROPIC_MODEL` 或 `CLAUDE_MODEL`（默认如：`claude-opus-4-5-20251001`）。
+- **代理地址（可选）**: `ANTHROPIC_BASE_URL`，用于兼容第三方中转 API。
+- **自定义镜像（可选）**: `DOCKER_IMAGE`，覆盖默认的 `claude-pipeline-agent:latest`，例如使用测试版本的镜像。
+
+环境变量可以通过根目录下的 `.env` 文件统一配置，也可以在命令行执行时临时注入。
+
+**使用示例：**
+
 ```bash
+# --------------------------------------------------
+# 方式一：默认执行（自动读取 .env 中环境变量）
+# --------------------------------------------------
 # 单个仓库
 ./run.sh https://github.com/owner/repo
 
-# 批量执行 repos.yaml 中所有 enabled 仓库
+# 批量执行 config/repos.yaml 中所有 enabled 仓库
 ./run.sh
 
-# 使用代理
+# --------------------------------------------------
+# 方式二：命令行指定临时配置
+# --------------------------------------------------
+# 使用代理（例如 DashScope 阿里云通义千问模型）
 ANTHROPIC_BASE_URL=https://dashscope.aliyuncs.com/apps/anthropic \
 ANTHROPIC_MODEL=qwen3.5-plus \
 ./run.sh https://github.com/owner/repo
+
+# 指定不同的运行时镜像
+DOCKER_IMAGE=claude-pipeline-agent:test ./run.sh https://github.com/owner/repo
+```
+
+如果你希望彻底脱离脚本并完全手动控制 Docker，可以直接使用等价的 `docker run` 原生命令配置所有参数：
+
+```bash
+docker run -d -m 4g --cpus 1 \
+  --label claude-pipeline=true \
+  -v cargo-registry-cache:/home/pipeline/.cargo/registry \
+  -e REPO_URL="https://github.com/owner/repo" \
+  -e ANTHROPIC_API_KEY="your-api-key" \
+  -e ANTHROPIC_MODEL="qwen3.5-plus" \
+  -e ANTHROPIC_BASE_URL="https://dashscope.aliyuncs.com/apps/anthropic" \
+  -e GIT_TOKEN="your-github-token" \
+  -e GIT_AUTHOR_NAME="Claude Pipeline Bot" \
+  -e GIT_AUTHOR_EMAIL="pipeline@claude.ai" \
+  claude-pipeline-agent:latest
 ```
 
 #### Kubernetes 模式（定时自动触发）

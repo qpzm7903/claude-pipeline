@@ -21,11 +21,24 @@ GH="${GIT_TOKEN:-${GITHUB_TOKEN:-}}"
 
 [ -z "$API_KEY" ] && { echo "[ERROR] ANTHROPIC_API_KEY 或 ANTHROPIC_AUTH_TOKEN 未设置"; exit 1; }
 
+# 从 config.yaml 提取默认值
+if command -v python3 &>/dev/null && [ -f "config/config.yaml" ]; then
+  GIT_NAME=$(python3 -c "import yaml; print(yaml.safe_load(open('config/config.yaml')).get('git', {}).get('author_name', 'Claude Pipeline Bot'))" 2>/dev/null || echo "Claude Pipeline Bot")
+  GIT_EMAIL=$(python3 -c "import yaml; print(yaml.safe_load(open('config/config.yaml')).get('git', {}).get('author_email', 'pipeline@claude.ai'))" 2>/dev/null || echo "pipeline@claude.ai")
+else
+  GIT_NAME="Claude Pipeline Bot"
+  GIT_EMAIL="pipeline@claude.ai"
+fi
+
+GIT_NAME="${GIT_AUTHOR_NAME:-$GIT_NAME}"
+GIT_EMAIL="${GIT_AUTHOR_EMAIL:-$GIT_EMAIL}"
+
 run_container() {
   local repo_url="$1"
   local args=(
     -d -m 4g --cpus 1
     --label claude-pipeline=true
+    -v cargo-registry-cache:/home/pipeline/.cargo/registry
     -e REPO_URL="$repo_url"
     -e ANTHROPIC_API_KEY="$API_KEY"
     -e ANTHROPIC_AUTH_TOKEN="$API_KEY"
@@ -34,6 +47,8 @@ run_container() {
     -e GIT_TOKEN="$GH"
     -e GITHUB_TOKEN="$GH"
     -e GH_TOKEN="$GH"
+    -e GIT_AUTHOR_NAME="$GIT_NAME"
+    -e GIT_AUTHOR_EMAIL="$GIT_EMAIL"
   )
   [ -n "${ANTHROPIC_BASE_URL:-}" ] && args+=(-e ANTHROPIC_BASE_URL="$ANTHROPIC_BASE_URL")
 
