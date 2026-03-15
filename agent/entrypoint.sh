@@ -77,114 +77,127 @@ log_success "克隆完成"
 cat > /tmp/fmt_stream.py << 'PYEOF'
 import sys, json
 
-TEXT_LIMIT    = 1000
-CONTENT_LINES = 50
+TEXT_LIMIT    = 500
+CONTENT_LINES = 15
 
 # Colors for terminal output
-C_THOUGHT = '\033[1;35m'
-C_ACTION  = '\033[1;36m'
-C_RESULT  = '\033[1;32m'
-C_INFO    = '\033[1;34m'
+C_THOUGHT = '\033[38;5;245m'  # Dim gray for thoughts
+C_ACTION  = '\033[1;36m'      # Cyan for actions
+C_RESULT  = '\033[0;32m'      # Green for results
+C_INFO    = '\033[1;34m'      # Blue for info
 C_RESET   = '\033[0m'
+C_DIM     = '\033[2m'         # Dim filter for results
 
-def p(s):
-    print(s, flush=True)
+def p(s, end='\n'):
+    print(s, end=end, flush=True)
 
 for raw in sys.stdin:
     raw = raw.strip()
-    if not raw:
-        continue
+    if not raw: continue
     try:
         obj = json.loads(raw)
     except ValueError:
-        p(raw)
         continue
 
     t = obj.get('type', '')
 
-    if t == 'system':
-        if obj.get('subtype') == 'init':
-            p(f"{C_INFO}🚀 [初始化 Init] model={obj.get('model','')} cwd={obj.get('cwd','')}{C_RESET}")
+    if t == 'system' and obj.get('subtype') == 'init':
+        p(f"\n{C_INFO}🚀 [Init] model={obj.get('model','')} cwd={obj.get('cwd','')}{C_RESET}")
         continue
 
     if t == 'assistant':
-        for block in obj.get('message', {}).get('content', []):
+        content = obj.get('message', {}).get('content', [])
+        has_thought = False
+        for block in content:
             bt = block.get('type', '')
             if bt == 'text':
                 text = block.get('text', '').strip()
-                if not text:
-                    continue
-                if len(text) > TEXT_LIMIT:
-                    text = text[:TEXT_LIMIT] + ' ... (truncated)'
-                p(f"\n{C_THOUGHT}🧠 [思考 Thought]{C_RESET}")
+                if not text: continue
+                if len(text) > TEXT_LIMIT: text = text[:TEXT_LIMIT] + ' ... (truncated)'
+                if not has_thought:
+                    p(f"\n{C_THOUGHT}🧠 [Thought]{C_RESET}")
+                    has_thought = True
                 for ln in text.splitlines():
-                    if ln.strip():
-                        p('    ' + ln)
+                    if ln.strip(): p(f"{C_THOUGHT}    {ln}{C_RESET}")
             elif bt == 'tool_use':
                 name = block.get('name', '')
                 inp  = block.get('input', {})
-                p(f"\n{C_ACTION}🛠️  [行动 Action]: {name}{C_RESET}")
+                # Put action inline
+                p(f"{C_ACTION}🛠️  [{name}]{C_RESET} ", end="")
                 if name == 'Bash':
-                    cmd = inp.get('command', '').replace('\n', '; ')[:200]
-                    p('    $ ' + cmd)
+                    cmd = inp.get('command', '').replace('\n', '; ')[:120]
+                    p(f"$ {cmd}")
                 elif name == 'Read':
-                    fp     = inp.get('file_path', '')
-                    offset = inp.get('offset', '')
-                    lim    = inp.get('limit', '')
-                    rng    = (' L' + str(offset) + '+' + str(lim)) if offset else ''
-                    p('    📄 ' + fp + rng)
-                elif name == 'Write':
-                    p('    ✏️  ' + inp.get('file_path', ''))
-                elif name == 'Edit':
-                    p('    📝 ' + inp.get('file_path', ''))
+                    fp = inp.get('file_path', '')
+                    rng = f" L{inp.get('offset', '')}+{inp.get('limit', '')}" if inp.get('offset') else ""
+                    p(f"📄 {fp}{rng}")
+                elif name == 'Write' or name == 'Edit':
+                    p(f"📝 {inp.get('file_path', '')}")
                 elif name == 'Glob':
-                    p('    🔍 ' + inp.get('pattern', ''))
+                    p(f"🔍 {inp.get('pattern', '')}")
                 elif name == 'Grep':
-                    p('    🔎 ' + inp.get('pattern', '') + '  @ ' + inp.get('path', '.'))
+                    p(f"🔎 {inp.get('pattern', '')} @ {inp.get('path', '.')}")
                 elif name in ('TodoWrite', 'TodoRead'):
-                    p('    📋 ' + str(len(inp.get('todos', []))) + ' tasks')
+                    p(f"📋 {len(inp.get('todos', []))} tasks")
                 else:
-                    p('    ▶ ' + str(inp)[:100])
+                    p(f"▶ {str(inp)[:80]}")
         continue
 
     tr = obj.get('tool_use_result') or (obj if t == 'tool_result' else None)
     if tr is not None:
-        p(f"{C_RESULT}✅ [结果 Result]{C_RESET}")
+        has_content = False
+        parts = []
+        is_err = False
         if isinstance(tr, dict):
-            stdout  = tr.get('stdout', '')
-            stderr  = tr.get('stderr', '')
+            stdout = tr.get('stdout', '')
+            stderr = tr.get('stderr', '')
             content = tr.get('content', '')
+            if str(tr.get('exitCode', '0')) != '0' and stderr:
+                is_err = True
+            for k in ('numLines', 'totalLines', 'numFiles', 'exitCode'):
+                if k in tr: parts.append(f"{k}={tr[k]}")
+            if stdout or stderr or content:
+                has_content = True
+        elif isinstance(tr, list) and tr:
+            has_content = True
+        else:
+            if str(tr).strip(): has_content = True
+
+        icon = '❌' if is_err else '✅'
+        color = '\033[0;31m' if is_err else C_RESULT
+
+        if not has_content and not parts:
+            p(f"{color}    {icon} [Success]{C_RESET}")
+            continue
+
+        p(f"{color}    {icon} [Result]{C_RESET}")
+        
+        if isinstance(tr, dict):
             if stdout:
                 lines = stdout.rstrip().splitlines()
-                for ln in lines[:15]:
-                    p('    | ' + ln)
-                if len(lines) > 15:
-                    p('    | ... (' + str(len(lines) - 15) + ' more lines)')
-            if stderr and str(tr.get('exitCode', '0')) != '0':
-                for ln in stderr.rstrip().splitlines()[:5]:
-                    p('    ! ' + ln)
+                for ln in lines[:CONTENT_LINES]:
+                    p(f"{C_DIM}      | {ln.strip()[:150]}{C_RESET}")
+                if len(lines) > CONTENT_LINES:
+                    p(f"{C_DIM}      | ... ({len(lines) - CONTENT_LINES} more lines){C_RESET}")
+            if stderr and is_err:
+                for ln in stderr.rstrip().splitlines()[:10]:
+                    p(f"{C_DIM}      ! {ln.strip()[:150]}{C_RESET}")
             if content and not stdout:
                 lines = content.splitlines()
                 for ln in lines[:CONTENT_LINES]:
-                    p('    | ' + ln)
+                    p(f"{C_DIM}      | {ln.strip()[:150]}{C_RESET}")
                 if len(lines) > CONTENT_LINES:
-                    p('    | ... (' + str(len(lines) - CONTENT_LINES) + ' more lines)')
-            parts = []
-            for k in ('numLines', 'totalLines', 'numFiles', 'durationMs', 'truncated', 'exitCode'):
-                if k in tr:
-                    parts.append(k + '=' + str(tr[k]))
+                    p(f"{C_DIM}      | ... ({len(lines) - CONTENT_LINES} more lines){C_RESET}")
             if parts:
-                p('    └─ ' + ', '.join(parts))
+                p(f"{C_DIM}      └─ {', '.join(parts)}{C_RESET}")
         elif isinstance(tr, list):
             for item in tr[:3]:
-                p('    | ' + str(item)[:120])
-            if len(tr) > 3:
-                p('    | ... (' + str(len(tr) - 3) + ' more)')
+                p(f"{C_DIM}      | {str(item)[:120]}{C_RESET}")
         else:
             text = str(tr).strip()
             if text:
-                for ln in text.splitlines()[:10]:
-                    p('    | ' + ln)
+                for ln in text.splitlines()[:5]:
+                    p(f"{C_DIM}      | {ln.strip()[:150]}{C_RESET}")
         continue
 
     if 'content' in obj or 'tool_use_result' in obj:
@@ -193,21 +206,19 @@ for raw in sys.stdin:
         if isinstance(content, str) and content.strip():
             lines = content.splitlines()
             for ln in lines[:CONTENT_LINES]:
-                p('    | ' + ln)
+                p(f"{C_DIM}      | {ln.strip()[:150]}{C_RESET}")
             if len(lines) > CONTENT_LINES:
-                p('    | ... (' + str(len(lines) - CONTENT_LINES) + ' more lines)')
+                p(f"{C_DIM}      | ... ({len(lines) - CONTENT_LINES} more lines){C_RESET}")
         elif file_obj:
             fp  = file_obj.get('filePath', '')
             nln = file_obj.get('numLines', '?')
-            p('    < file: ' + fp + '  (' + str(nln) + ' lines)')
+            p(f"{C_DIM}      < file: {fp}  ({nln} lines){C_RESET}")
         continue
 
     if t == 'result':
-        cost     = obj.get('cost_usd', 0) or 0
-        turns    = obj.get('num_turns', 0)
-        duration = (obj.get('duration_ms', 0) or 0) // 1000
-        subtype  = obj.get('subtype', '')
-        p(f"{C_INFO}🏁 [结束 DONE] {subtype} turns={turns} cost=${cost:.4f} {duration}s{C_RESET}")
+        cost = obj.get('cost_usd', 0) or 0
+        turns = obj.get('num_turns', 0)
+        p(f"\n{C_INFO}🏁 [结束 DONE] turns={turns} cost=${cost:.4f}{C_RESET}")
         continue
 PYEOF
 
@@ -235,9 +246,18 @@ PROMPT="首先阅读项目的 CLAUDE.md 和 README.md 理解项目规范和当�
 5. 如果开发刚刚完成、待审查 -> 执行 bmad-code-review
 6. 如果一个 story 的 code-review 刚刚通过 -> **必须执行 bmad-retrospective 进行该 story 的复盘和经验总结**
 7. 如果 epic 全部完成 -> 执行 bmad-retrospective 进行 epic 级别复盘
-
+8. 如果一个 story 的 retrospective 刚刚完成（状态已更新为 done），且该 story 包含实际代码变更（feat/fix/refactor 类，非纯文档/规划 story）-> **执行版本发布**：
+   a. 读取当前版本号（从 Cargo.toml 的 [package] version 字段）
+   b. 根据 story 类型进行语义化版本升级：feat 类 -> minor 升级（如 1.3.0 -> 1.4.0），fix/refactor 类 -> patch 升级（如 1.3.0 -> 1.3.1）
+   c. 同步更新所有版本号文件（Cargo.toml、package.json、tauri.conf.json 中的 version 字段），确保版本一致
+   d. 提交版本升级：git add -A && git commit -m 'chore(release): bump version to vX.Y.Z'
+   e. 创建并推送 tag：git tag vX.Y.Z && git push && git push --tags
+   f. 使用 gh run list --workflow build.yml 或 gh run watch 等待 Build and Release workflow 触发并完成，确认 Release 创建成功
+   g. 如果 Release 构建失败，分析 gh run view --log-failed 的日志并尝试修复
+    
 【极严格的单步执行要求】
 - 你在本次会话中，**只允许执行上述清单中的 1 个核心 BMAD 技能**！
+- 第 8 步（版本发布）是 retrospective 的**附属动作**，不计为独立 BMAD 技能。如果你本次执行的是 retrospective（步骤 6/7），完成复盘后应继续检查是否需要执行步骤 8 进行版本发布，这不违反单步执行原则。
 - 该技能执行完毕后，你必须立刻整理并保存输出文件，然后提交代码并结束本次会话！
 - **绝对不要**在没有重新启动新 session 的情况下，接着做下一步骤！这会导致上下文爆炸。
 

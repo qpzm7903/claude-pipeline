@@ -26,11 +26,22 @@
 - **禁止** `git push --force`
 - **禁止** 空提交（`--allow-empty`）
 
+## 代码审查后的强制操作序列（最高优先级，不可跳过）
+
+执行 `bmad-code-review` 或任何代码审查后，**必须立即**按以下 4 步操作，缺一不可：
+
+1. **写入文件**：用 Write/Edit 工具将审查结论追加到对应 story 文件（`_bmad-output/implementation-artifacts/[story-id].md`），更新 `status` 字段
+2. **暂存**：`git add -A`
+3. **提交**：`git commit -m "docs([story-id]): code review findings [skip ci]"`
+4. **推送**：`git push`
+
+**严禁行为**：将审查结论仅输出到终端后直接结束。终端输出 ≠ commit，不写文件、不 commit 视为任务失败。
+
 ## 必须提交的场景
 
 每次执行结束前，**必须至少有一个 commit**。以下情况必须主动创建 commit：
 
-- **代码审查完成后**：将审查结论写入 story 状态文件（更新 `status`）并创建 `dev-log` 条目后提交
+- **代码审查完成后**：按上方"代码审查后的强制操作序列"执行
 - **任务分析/规划完成后**：将分析结果更新到 story 或 sprint 状态文件后提交
 - **无代码变更但有审查结论**：至少执行 `docs: [story-id] code review findings [skip ci]` 类型的 commit
 

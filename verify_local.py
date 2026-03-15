@@ -35,6 +35,9 @@ def test_entrypoint_prompt():
         ("ANTHROPIC_API_KEY",       "API key 检查"),
         ("REPO_URL",                "仓库 URL 变量"),
         ("CLAUDE.md",               "CLAUDE.md 引用"),
+        ("版本发布",                  "版本发布步骤"),
+        ("git tag",                  "tag 创建命令"),
+        ("Cargo.toml",               "Cargo.toml 版本引用"),
     ]
 
     all_ok = True
