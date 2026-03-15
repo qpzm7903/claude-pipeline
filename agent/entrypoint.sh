@@ -64,6 +64,8 @@ done
 cd "${WORKSPACE}"
 git config user.name  "${GIT_AUTHOR_NAME:-Claude Pipeline Bot}"
 git config user.email "${GIT_AUTHOR_EMAIL:-pipeline@claude.ai}"
+
+BEFORE_COMMIT=$(git rev-parse HEAD 2>/dev/null || echo "")
 log_success "克隆完成"
 
 # ── stream-json 格式化脚本 ──────────────────────────────────────────
@@ -204,16 +206,35 @@ _fmt_stream() {
 log_section "步骤 2: Claude 自主执行"
 
 PROMPT="首先阅读项目的 CLAUDE.md 和 README.md 理解项目规范和当前状态。
-如果项目使用 BMAD 工作流（存在 _bmad/ 目录或 .claude/skills/ 下有 bmad-* 文件夹），执行 bmad-help 分析当前状态。
-分析完成后，请不要询问我，直接按照你的专业判断自动执行下一个必需的步骤（优先执行 bmad-create-story 准备新任务，或对 review 状态的任务执行 bmad-code-review）。
-请持续工作，直到当前 Sprint 的逻辑链路闭环或遇到必须人工干预的阻塞性错误为止。
+
+如果项目使用 BMAD 工作流（存在 _bmad/ 目录或 .claude/skills/ 下有 bmad-* 文件夹），你**必须严格作为一个单步执行节点（状态机）**来工作，绝不允许在一个 session 内连续执行多个冗长的任务。
+
+请分析当前项目状态，并**只执行当前最急需的唯一一个 BMAD 技能**。判断逻辑如下：
+1. 如果还没规划完（没有架构或 Epic） -> 执行相关的规划技能（如 bmad-create-epics-and-stories）
+2. 如果缺 sprint-status.yaml -> 执行 bmad-sprint-planning
+3. 如果有待处理的 sprint -> 执行 bmad-create-story 准备一个任务
+4. 如果刚好有刚创建好的新 story -> 执行 bmad-dev-story 进行开发
+5. 如果开发刚刚完成 -> 执行 bmad-code-review
+6. 如果 epic 全部完成 -> 执行 bmad-retrospective
+
+【极严格的单步执行要求】
+- 你在本次会话中，**只允许执行上述清单中的 1 个核心 BMAD 技能**！
+- 该技能执行完毕后，你必须立刻整理并保存输出文件，然后提交代码并结束本次会话！
+- **绝对不要**在没有重新启动新 session 的情况下，接着做下一步骤！这会导致上下文爆炸。
 
 【工作流强制要求】
-完成所有工作后，你必须自主完成以下收尾工作：
-1. 运行测试进行自验证
-2. 执行 git add -A && git commit（使用 Conventional Commits 格式）
-3. 执行 git push 将代码推送到远程仓库
+在工作期间和收尾阶段，你必须自主完成以下动作：
+1. 分阶段尽早提交：完成你本次负责的那个唯一独立任务后，立即执行 git add -A && git commit（使用 Conventional Commits 格式）。
+2. 运行测试进行自验证（如果是 dev-story 等阶段）
+3. 最终执行 git push 将所有代码推送到远程仓库
 4. 如果你在一个新的分支上工作，且需要合并，请使用 gh pr create 命令自动创建 Pull Request
+
+【代码审查强制提交规则】（最高优先级，不可违反）
+如果你本次执行的是代码审查（bmad-code-review），无论结论如何，必须执行以下步骤后才能退出：
+- 步骤A：将审查结论（通过/发现问题+问题列表）写入对应的 Story 文件（如 _bmad-output/implementation-artifacts/CORE-005.md），更新其 status 字段
+- 步骤B：执行 git add -A && git commit -m 'docs([story-id]): code review findings [skip ci]'
+- 步骤C：执行 git push
+绝对禁止仅将审查结论输出到终端而不写入文件和提交。没有 commit 等于本次执行无效。
 
 请注意，环境已预装 gh CLI 且已配置好相关的环境与权限，你可以直接使用。"
 
@@ -231,6 +252,13 @@ if [ "${PIPESTATUS[0]}" -ne 0 ]; then
 fi
 
 log_success "Claude 自主执行完成"
+
+AFTER_COMMIT=$(git rev-parse HEAD 2>/dev/null || echo "")
+if [ -n "$BEFORE_COMMIT" ] && [ "$BEFORE_COMMIT" = "$AFTER_COMMIT" ]; then
+    log_error "Pipeline 失败: 代码仓库没有任何新的 commit (避免 Completed 状态虚假成功)"
+    exit 3
+fi
+
 log_section "流水线完成 ✓"
 log_info "Branch: $(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
 exit 0
