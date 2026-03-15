@@ -64,12 +64,12 @@ jobs:
           tar --exclude='.git' \
               --exclude='.env' \
               --exclude='logs' \
-              --exclude='pipeline.db' \
               --exclude='__pycache__' \
               -czf claude-pipeline-${TAG}-src.tar.gz \
-              orchestrator/ agent/ config/ \
+              agent/ config/ example_repo/ k8s/ \
+              run.sh k8s-run.sh \
               requirements.txt verify_local.py \
-              docker-compose.yml .env.example README.md
+              .env.example README.md CLAUDE.md
 
       # ── 创建 GitHub Release ───────────────────────────────────────
       - name: Create GitHub Release
@@ -95,6 +95,5 @@ jobs:
             cp .env.example .env
             # 填入 ANTHROPIC_API_KEY 和 GIT_TOKEN
 
-            pip install -r requirements.txt
-            python3 -m orchestrator.main
+            ./run.sh https://github.com/owner/repo
             ```

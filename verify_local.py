@@ -3,7 +3,7 @@ verify_local.py - 本地验证脚本（不需要 Docker）
 
 用法:
   python verify_local.py                    # 完整验证
-  python verify_local.py --test-prompt      # 测试 entrypoint 提示词片段解析
+  python verify_local.py --test-prompt      # 测试 entrypoint 工作流完整性
   python verify_local.py --test-config      # 验证 config.yaml 结构
 """
 
@@ -25,29 +25,21 @@ def test_entrypoint_prompt():
 
     content = entrypoint.read_text()
     checks = [
-        ("步骤 1.5: 任务发现与认领", "Git 原子抢占块"),
-        ("git pull --rebase",    "rebase 防冲突"),
-        ("grep -n",               "扫描待处理任务"),
-        ("sed -i",               "标记任务为 [-]"),
-        ("git push",             "push 作为分布式锁"),
-        ("log_success \"认领",   "认领成功日志"),
-        ("步骤 2: Claude 自主执行", "Claude 执行步骤"),
-        ("PIPELINE_COMPLETE",   "完成标志"),
-        ("IS_BMAD",              "BMAD 项目检测"),
-        ("run_bmad_planning",    "BMAD 规划函数"),
-        ("run_bmad_create_story", "BMAD create-story 函数"),
-        ("ci-fix",                "BMAD ci-fix 修复阶段"),
-        ("pipeline-ci-failure",  "CI failure issue 标签"),
-        ("create_ci_failure_issue", "CI failure issue 创建函数"),
-        ("STORY_COMPLETE",        "Story 完成检测"),
-        ("BMAD_PHASE",             "BMAD 阶段循环状态机"),
-        ("MAX_PHASE_LOOPS",        "循环防护上限"),
-        ("run_independent_review", "独立代码审查函数"),
-        ("project-context.md",     "项目上下文文件引用"),
-        ("run_pr_feedback_loop",   "PR 反馈循环函数"),
-        ("run_readiness_check",    "实施就绪检查函数"),
-        ("append_dev_log",         "开发日志追加函数"),
-        ("dev-log.md",             "开发日志文件引用"),
+        ("步骤 0: 环境检查",         "环境检查步骤"),
+        ("步骤 1: 克隆仓库",         "克隆仓库步骤"),
+        ("步骤 2: Claude 自主执行",   "Claude 执行步骤"),
+        ("步骤 3: 推送代码",         "推送代码步骤"),
+        ("git clone",               "克隆命令"),
+        ("git push",                "推送命令"),
+        ("claude",                  "Claude CLI 调用"),
+        ("stream-json",             "stream-json 输出格式"),
+        ("_fmt_stream",             "格式化函数"),
+        ("ANTHROPIC_API_KEY",       "API key 检查"),
+        ("REPO_URL",                "仓库 URL 变量"),
+        ("git add -A",              "兜底 git add"),
+        ("git commit",              "兜底 git commit"),
+        ("CLAUDE.md",               "CLAUDE.md 引用"),
+        ("create_pr.py",            "PR 创建脚本引用"),
     ]
 
     all_ok = True
@@ -243,6 +235,41 @@ def test_k8s_manifests():
     return all_ok
 
 
+def test_example_claude_md():
+    """验证 example_repo/CLAUDE.md 存在且包含必要内容。"""
+    print("\n" + "="*50)
+    print("测试 5: example_repo/CLAUDE.md 模板验证")
+    print("="*50)
+
+    example_md = Path(__file__).parent / "example_repo" / "CLAUDE.md"
+    if not example_md.exists():
+        print(f"❌ 文件不存在: {example_md}")
+        return False
+
+    content = example_md.read_text()
+    checks = [
+        ("简体中文",        "中文支持要求"),
+        ("prompt.md",      "prompt.md 保护"),
+        ("BMAD",           "BMAD 工作流"),
+        ("代码质量",        "代码质量要求"),
+        ("GitHub Actions", "CI/CD 要求"),
+        ("checksums",      "校验和要求"),
+        ("issue",          "issue 处理"),
+    ]
+
+    all_ok = True
+    for keyword, description in checks:
+        if keyword in content:
+            print(f"  ✅ {description}")
+        else:
+            print(f"  ❌ 缺少: {description} (关键字: {keyword!r})")
+            all_ok = False
+
+    if all_ok:
+        print("✅ example_repo/CLAUDE.md 验证通过！")
+    return all_ok
+
+
 def main():
     parser = argparse.ArgumentParser(description="Claude Pipeline 本地验证")
     parser.add_argument("--test-prompt", action="store_true", help="测试 entrypoint 工作流完整性")
@@ -263,6 +290,7 @@ def main():
         results.append(test_config())
         results.append(test_run_sh())
         results.append(test_k8s_manifests())
+        results.append(test_example_claude_md())
 
     print("\n" + "="*50)
     passed = sum(results)

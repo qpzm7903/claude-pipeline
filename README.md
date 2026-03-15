@@ -1,18 +1,21 @@
 # Claude Pipeline
 
-AI 驱动的自动化开发流水线。定时扫描仓库任务，为每个任务启动独立容器，由 Claude 自主完成开发并提交 PR。
+AI 驱动的自动化开发流水线。定时扫描仓库，启动独立容器，由 Claude 全权自主完成开发并推送代码。
 
 ```
-[plan.md / BMAD Stories]
+[CLAUDE.md 规范 + 仓库代码]
         ↓ 定时触发（Docker / Kubernetes CronJob）
 [Agent Container]
-  ├── git clone
-  ├── discover（优先修复 pipeline-ci-failure issue → ci-fix）
-  ├── Git 原子抢占（分布式锁，多容器安全并发）
-  ├── Claude 自主执行（TDD → 实现 → 审查）
-  ├── git push + 自动创建 PR
-  └── Story 完成 → 打 tag → 等待 CI → 失败则建 issue
+  ├── git clone（带重试）
+  ├── Claude 自主执行（读取 CLAUDE.md → 自主决策 → 实施 → 提交）
+  └── 兜底提交 + git push + 自动创建 PR
 ```
+
+## 核心理念
+
+**Claude 全权自主决策**。`entrypoint.sh` 只是一个约 200 行的启动器，不编排任何业务逻辑。所有规范（BMAD 工作流、代码质量、版本发布等）通过目标仓库的 `CLAUDE.md` 传递给 Claude。
+
+这比复杂的 bash 状态机效果更好，因为 AI 的自主决策能力优于预设的固定流程。
 
 ## 快速开始
 
@@ -27,7 +30,15 @@ cp .env.example .env
 # GIT_TOKEN              GitHub Personal Access Token
 ```
 
-### 2. 配置仓库
+### 2. 在目标仓库中创建 CLAUDE.md
+
+将 `example_repo/CLAUDE.md` 复制到目标仓库根目录，按需修改：
+
+```bash
+cp example_repo/CLAUDE.md /path/to/your/repo/CLAUDE.md
+```
+
+### 3. 配置仓库列表
 
 编辑 `config/repos.yaml`，添加要监控的仓库：
 
@@ -38,7 +49,7 @@ repos:
     enabled: true
 ```
 
-### 3. 构建 Agent 镜像
+### 4. 构建 Agent 镜像
 
 镜像分两层，基础镜像（Rust、Node.js、claude CLI）很少变化，日常迭代只需重建 Agent 层：
 
@@ -50,7 +61,7 @@ docker build -t claude-pipeline-base:latest -f agent/Dockerfile.base ./agent/
 docker build -t claude-pipeline-agent:latest ./agent/
 ```
 
-### 4. 运行
+### 5. 运行
 
 #### Docker 模式（单次执行）
 
@@ -71,10 +82,6 @@ ANTHROPIC_MODEL=qwen3.5-plus \
 
 ```bash
 # 1. 创建 Secret
-cp k8s/secret.yaml.example k8s/secret.yaml
-kubectl apply -f k8s/secret.yaml
-
-# 或者直接从 .env 生成（推荐）
 ./k8s-run.sh --update-secret
 
 # 2. 部署 CronJob
@@ -85,8 +92,6 @@ kubectl apply -f k8s/secret.yaml
 ./k8s-run.sh --status                            # 查看状态
 ./k8s-run.sh --logs                              # 查看最近 Pod 日志
 ./k8s-run.sh --delete                            # 删除所有 CronJob
-./k8s-run.sh --update-secret                     # 换 token 后同步 Secret
-./k8s-run.sh --env .env.prod                     # 指定 env 文件
 ```
 
 ## 环境变量参考
@@ -104,12 +109,15 @@ kubectl apply -f k8s/secret.yaml
 ├── agent/
 │   ├── Dockerfile.base       # 基础镜像（Rust、Node.js、claude CLI）
 │   ├── Dockerfile            # Agent 镜像（基于 base，追加 entrypoint）
-│   ├── entrypoint.sh         # 克隆 → 认领任务 → Claude 执行 → 推送
+│   ├── entrypoint.sh         # 克隆 → Claude 自主执行 → 推送（~200 行）
+│   ├── container-CLAUDE.md   # 容器内 Claude 通用规则（提交规范等）
 │   └── create_pr.py          # 自动创建 GitHub PR
+├── example_repo/
+│   └── CLAUDE.md             # 目标仓库 CLAUDE.md 模板（复制到你的仓库使用）
 ├── k8s/
 │   ├── namespace.yaml        # K8s namespace
 │   ├── rbac.yaml             # ServiceAccount
-│   ├── cronjob-template.yaml # CronJob 模板（含占位符）
+│   ├── cronjob-template.yaml # CronJob 模板
 │   ├── secret.yaml.example   # Secret 示例
 │   └── render_and_apply.py   # 模板渲染 + kubectl apply
 ├── config/
@@ -124,9 +132,8 @@ kubectl apply -f k8s/secret.yaml
 
 多个容器可同时运行，通过 **Git 原子 push** 实现分布式锁：
 
-- 每个容器 `git push` 一个 `[-]` 标记认领任务
-- 只有 fast-forward push 成功的容器才能执行该任务
-- 其他容器收到拒绝后自动跳过，无需协调器
+- 只有 fast-forward push 成功的容器才能推送
+- 其他容器收到拒绝后自动跳过
 
 Kubernetes 模式默认 `concurrencyPolicy: Forbid`，上一个 Job 未结束时跳过本次触发。
 
@@ -137,18 +144,6 @@ ANTHROPIC_BASE_URL=https://dashscope.aliyuncs.com/apps/anthropic
 ANTHROPIC_AUTH_TOKEN=your-dashscope-key
 ANTHROPIC_MODEL=qwen3.5-plus
 ```
-
-## Story 完成 → Release 流程
-
-当一个 Story 的所有 Task 都完成（均标记为 `[x]`）后，pipeline 自动：
-
-1. 打 `story-{KEY}-{timestamp}` tag 并推送
-2. GitHub Actions 根据 tag 触发 Release 工作流
-3. 等待 CI 结果（最多 10 分钟）
-4. **CI 通过** → 正常结束
-5. **CI 失败** → 自动创建标记为 `pipeline-ci-failure` 的 GitHub Issue
-
-下次容器运行时，`discover` 阶段会优先检查该 issue，进入 `ci-fix` 模式让 Claude 修复并关闭 issue。
 
 ## 本地验证
 
