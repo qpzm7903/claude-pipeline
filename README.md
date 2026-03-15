@@ -118,6 +118,8 @@ docker run -d -m 4g --cpus 1 \
 
 #### Kubernetes 模式（定时自动触发）
 
+**方式一：使用 Secret（推荐生产环境）**
+
 ```bash
 # 1. 创建 Secret
 ./k8s-run.sh --update-secret
@@ -125,10 +127,40 @@ docker run -d -m 4g --cpus 1 \
 # 2. 部署 CronJob
 ./k8s-run.sh                                     # 所有 enabled 仓库
 ./k8s-run.sh https://github.com/owner/repo       # 单个仓库
+```
 
-# 3. 常用操作
-./k8s-run.sh --status                            # 查看状态
+**方式二：env 文件直接注入（无需 Secret，适合多模型/多账号场景）**
+
+```bash
+# 用 .env.xxx 文件中的所有变量直接写入 pod，不经过 K8s Secret
+./k8s-run.sh --env .env.m2.5 --name my-m2-5
+
+# 指定 repo URL（env 文件中有 GIT_REPO_URL 时可省略）
+./k8s-run.sh --env .env.m2.5 --name my-m2-5 https://github.com/owner/repo
+
+# CronJob 已存在时自动更新，不存在时自动创建（kubectl apply 幂等）
+```
+
+env 文件格式（支持所有 `ANTHROPIC_*`、`GIT_*` 变量，别名自动补全）：
+
+```bash
+ANTHROPIC_AUTH_TOKEN=sk-xxx
+ANTHROPIC_BASE_URL=http://your-proxy
+ANTHROPIC_MODEL=MiniMax-M2.5
+ANTHROPIC_SMALL_FAST_MODEL=MiniMax-M2.5
+ANTHROPIC_DEFAULT_OPUS_MODEL=MiniMax-M2.5
+ANTHROPIC_DEFAULT_SONNET_MODEL=MiniMax-M2.5
+ANTHROPIC_DEFAULT_HAIKU_MODEL=MiniMax-M2.5
+GIT_TOKEN=ghp_xxx
+GIT_REPO_URL=https://github.com/owner/repo   # 可选，省略则用命令行参数
+```
+
+**常用操作**
+
+```bash
+./k8s-run.sh --status                            # 查看所有 CronJob / Job / Pod 状态
 ./k8s-run.sh --logs                              # 查看最近 Pod 日志
+./k8s-run.sh --logs -f                           # 实时跟踪
 ./k8s-run.sh --delete                            # 删除所有 CronJob
 ```
 

@@ -2,15 +2,16 @@
 # k8s-run.sh - Kubernetes CronJob 管理入口
 #
 # 用法:
-#   ./k8s-run.sh                                    # 为所有 enabled repo 创建/更新 CronJob
-#   ./k8s-run.sh https://github.com/user/repo       # 单个 repo
-#   ./k8s-run.sh --env .env.prod [repo_url]         # 指定 env 文件
-#   ./k8s-run.sh --update-secret                    # 用当前 .env 更新 K8s Secret
-#   ./k8s-run.sh --status                           # 查看 CronJob、Job、Pod 状态
-#   ./k8s-run.sh --delete                           # 删除所有 CronJob
-#   ./k8s-run.sh --logs                             # 查看最近 Pod 的完整日志
-#   ./k8s-run.sh --logs -f                          # 实时跟踪最近 Pod 的日志
-#   ./k8s-run.sh --logs <pod-name>                  # 查看指定 Pod 的日志
+#   ./k8s-run.sh                                              # 为所有 enabled repo 创建/更新 CronJob
+#   ./k8s-run.sh https://github.com/user/repo                 # 单个 repo
+#   ./k8s-run.sh --env .env.prod [repo_url]                   # 指定 env 文件（走 Secret）
+#   ./k8s-run.sh --env .env.m2.5 --name my-cj [repo_url]     # env 直接注入 pod，自定义名称，无需 Secret
+#   ./k8s-run.sh --update-secret                              # 用当前 .env 更新 K8s Secret
+#   ./k8s-run.sh --status                                     # 查看 CronJob、Job、Pod 状态
+#   ./k8s-run.sh --delete                                     # 删除所有 CronJob
+#   ./k8s-run.sh --logs                                       # 查看最近 Pod 的完整日志
+#   ./k8s-run.sh --logs -f                                    # 实时跟踪最近 Pod 的日志
+#   ./k8s-run.sh --logs <pod-name>                            # 查看指定 Pod 的日志
 #
 # 前置条件:
 #   1. kubectl 已配置并连接到目标集群
@@ -24,13 +25,18 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 NAMESPACE="claude-pipeline"
 ENV_FILE=""
+CRONJOB_NAME=""
 
-# 解析 --env 参数（支持出现在任意位置）
+# 解析 --env / --name 参数（支持出现在任意位置）
 REMAINING_ARGS=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --env)
             ENV_FILE="$2"
+            shift 2
+            ;;
+        --name)
+            CRONJOB_NAME="$2"
             shift 2
             ;;
         *)
@@ -157,6 +163,15 @@ case "${1:-}" in
     ;;
 
   *)
-    python3 "${SCRIPT_DIR}/k8s/render_and_apply.py" "$@"
+    EXTRA_ARGS=()
+    # 指定了 env 文件 → 用 inline 模式（env 直接写入 pod，不用 Secret）
+    if [ -n "${ENV_FILE}" ]; then
+        EXTRA_ARGS+=("--inline-env")
+    fi
+    # 指定了自定义 CronJob 名称
+    if [ -n "${CRONJOB_NAME}" ]; then
+        EXTRA_ARGS+=("--name" "${CRONJOB_NAME}")
+    fi
+    python3 "${SCRIPT_DIR}/k8s/render_and_apply.py" "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}" "$@"
     ;;
 esac
