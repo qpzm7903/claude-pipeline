@@ -947,6 +947,11 @@ cd "${WORKSPACE}"
 CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
 
 # 安全兜底：若 Claude 遗漏了 commit，警告并补一个
+# review_result.json / AGENT_BLOCKED.json 由 pipeline 自身写入，不计入 Claude 的提交义务
+{
+    echo "review_result.json"
+    echo "AGENT_BLOCKED.json"
+} >> "${WORKSPACE}/.git/info/exclude" 2>/dev/null || true
 git add -A
 if ! git diff --cached --quiet; then
     log_warning "Claude 未自行提交，bash 兜底提交（建议检查 prompt）"
