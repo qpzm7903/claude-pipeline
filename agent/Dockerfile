@@ -7,6 +7,7 @@ FROM claude-pipeline-base:latest
 
 USER root
 COPY --chown=pipeline:pipeline entrypoint.sh /agent/entrypoint.sh
+COPY --chown=pipeline:pipeline default-prompt.txt /agent/default-prompt.txt
 RUN chmod +x /agent/entrypoint.sh
 
 RUN mkdir -p /home/pipeline/.claude && chown pipeline:pipeline /home/pipeline/.claude

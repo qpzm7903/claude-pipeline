@@ -80,3 +80,23 @@ spec:
                     secretKeyRef:
                       name: claude-pipeline-secrets
                       key: GIT_TOKEN
+                # ── Prompt 自定义（可选，三选一） ─────────────────────────────
+                #
+                # ① 文件挂载（推荐）：
+                #   1. 创建 ConfigMap:
+                #      kubectl create configmap claude-prompt-{REPO_SLUG} \
+                #        --from-file=prompt.txt=/path/to/custom-prompt.txt \
+                #        -n claude-pipeline
+                #   2. 取消下方 volumeMounts / volumes / env 三段注释
+                #
+                # - name: CLAUDE_PROMPT_FILE
+                #   value: /prompts/prompt.txt
+                #
+                # ② 内联字符串（适合短 prompt）：
+                # - name: CLAUDE_PROMPT
+                #   valueFrom:
+                #     configMapKeyRef:
+                #       name: claude-prompt-{REPO_SLUG}
+                #       key: prompt
+                #
+                # ③ 不配置 → 使用镜像内置 /agent/default-prompt.txt

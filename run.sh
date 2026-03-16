@@ -11,6 +11,11 @@
 #   GIT_TOKEN / GITHUB_TOKEN
 #   ANTHROPIC_BASE_URL（非空才传入容器）
 #   DOCKER_IMAGE（默认 claude-pipeline-agent:latest）
+#
+# Prompt 自定义（三选一，优先级从高到低）：
+#   CLAUDE_PROMPT_FILE=/path/to/prompt.txt  — 本地文件，自动挂载到容器内
+#   CLAUDE_PROMPT="..."                     — 内联字符串，直接作为 env 传入
+#   （不设置）                              — 使用镜像内置 /agent/default-prompt.txt
 
 set -euo pipefail
 
@@ -51,6 +56,16 @@ run_container() {
     -e GIT_AUTHOR_EMAIL="$GIT_EMAIL"
   )
   [ -n "${ANTHROPIC_BASE_URL:-}" ] && args+=(-e ANTHROPIC_BASE_URL="$ANTHROPIC_BASE_URL")
+
+  # Prompt 自定义：文件挂载优先，其次内联字符串
+  if [ -n "${CLAUDE_PROMPT_FILE:-}" ]; then
+    if [ ! -f "${CLAUDE_PROMPT_FILE}" ]; then
+      echo "[ERROR] CLAUDE_PROMPT_FILE 文件不存在: ${CLAUDE_PROMPT_FILE}"; exit 1
+    fi
+    args+=(-v "${CLAUDE_PROMPT_FILE}:${CLAUDE_PROMPT_FILE}:ro" -e "CLAUDE_PROMPT_FILE=${CLAUDE_PROMPT_FILE}")
+  elif [ -n "${CLAUDE_PROMPT:-}" ]; then
+    args+=(-e "CLAUDE_PROMPT=${CLAUDE_PROMPT}")
+  fi
 
   local cid
   cid=$(docker run "${args[@]}" "$IMAGE")

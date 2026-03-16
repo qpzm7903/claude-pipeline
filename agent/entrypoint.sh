@@ -233,55 +233,35 @@ _fmt_stream() {
 
 log_section "步骤 2: Claude 自主执行"
 
-PROMPT="首先阅读项目的 CLAUDE.md 和 README.md 理解项目规范和当前状态。
-
-如果项目使用 BMAD 工作流（存在 _bmad/ 目录或 .claude/skills/ 下有 bmad-* 文件夹），你**必须严格作为一个单步执行节点（状态机）**来工作，绝不允许在一个 session 内连续执行多个冗长的任务。
-
-请分析当前项目状态，并**只执行当前最急需的唯一一个 BMAD 技能**。判断逻辑如下：
-0. 启动时，**必须首先使用 gh CLI 检查最近一次 push 的 GitHub Actions/CI 执行状态**。如果最近的 CI 失败，必须优先进行修复；如果处于进行中，需等待执行完成；确认 CI 成功后才能继续其他全新任务。你可以自由决定使用哪些 gh 命令来完成状态检查与等待。
-1. 如果还没规划完（没有架构或 Epic） -> 执行相关的规划技能（如 bmad-create-epics-and-stories）
-2. 如果缺 sprint-status.yaml -> 执行 bmad-sprint-planning
-3. 如果有待处理的 sprint，且当前不存在进行中的 story -> 执行 bmad-create-story 准备新任务
-4. 如果有刚创建好、待开发的 story -> 执行 bmad-dev-story 进行开发
-5. 如果开发刚刚完成、待审查 -> 执行 bmad-code-review
-6. 如果一个 story 的 code-review 刚刚通过 -> **必须执行 bmad-retrospective 进行该 story 的复盘和经验总结**
-7. 如果 epic 全部完成 -> 执行 bmad-retrospective 进行 epic 级别复盘
-8. 如果存在状态为 done 的 story，且尚未为该 story 创建版本 tag -> **执行版本发布**：
-   判断方法：读取该 story 的文件，检查其 `type` 字段（或 story 标题/ID 前缀）是否为 feat/fix/refactor；若是纯文档/规划类 story（type: docs/chore/planning）则跳过发布。
-   a. 读取当前版本号（从 Cargo.toml 的 [package] version 字段）
-   b. 根据 story 的 type 字段进行语义化版本升级：feat 类 -> minor 升级（如 1.3.0 -> 1.4.0），fix/refactor 类 -> patch 升级（如 1.3.0 -> 1.3.1）
-   c. 同步更新所有版本号文件（Cargo.toml、package.json、tauri.conf.json 中的 version 字段），确保版本一致
-   d. 提交版本升级：git add -A && git commit -m 'chore(release): bump version to vX.Y.Z'
-   e. 创建并推送 tag：git tag vX.Y.Z && git push && git push --tags
-   f. 使用 gh run list --workflow build.yml 或 gh run watch 等待 Build and Release workflow 触发并完成，确认 Release 创建成功
-   g. 如果 Release 构建失败，分析 gh run view --log-failed 的日志并尝试修复
-    
-【极严格的单步执行要求】
-- 你在本次会话中，**只允许执行上述清单中的 1 个核心 BMAD 技能**！
-- 第 8 步（版本发布）是 retrospective 的**附属动作**，不计为独立 BMAD 技能。如果你本次执行的是 retrospective（步骤 6/7），完成复盘后应继续检查是否需要执行步骤 8 进行版本发布，这不违反单步执行原则。
-- 该技能执行完毕后，你必须立刻整理并保存输出文件，然后提交代码并结束本次会话！
-- **绝对不要**在没有重新启动新 session 的情况下，接着做下一步骤！这会导致上下文爆炸。
-
-【工作流强制要求】
-在工作期间和收尾阶段，你必须自主完成以下动作：
-1. 分阶段尽早提交：完成你本次负责的那个唯一独立任务后，立即执行 git add -A && git commit（使用 Conventional Commits 格式）。
-2. 运行测试进行自验证（如果是 dev-story 等阶段）
-3. 最终执行 git push 将所有代码推送到远程仓库。**Push 后，建议继续使用 gh CLI 监控并等待 Github Action 执行成功后再结束任务；或者 Push 后立刻结束，由下一个接手的容器启动时检查 CI 状态**。你可以自由决定使用哪些 gh 命令来进行监控。
-4. 如果你在一个新的分支上工作，且需要合并，请使用 gh pr create 命令自动创建 Pull Request
-
-【代码审查强制提交规则】（最高优先级，不可违反）
-如果你本次执行的是代码审查（bmad-code-review），无论结论如何，必须执行以下步骤后才能退出：
-- 步骤A：将审查结论写入文件（Thought 中的文字不算数，必须使用 Write 工具实际写入磁盘）：
-  1. 先用 Glob 搜索 Story 文件，例如路径模式：_bmad-output/implementation-artifacts/[story-id]*.md 或 **/*[story-id]*
-  2. 如果找到 Story 文件 → 更新该文件的 status 字段，在文件末尾追加审查结论
-  3. 如果找不到 Story 文件 → 必须用 Write 工具创建 _bmad-output/implementation-artifacts/[story-id]-code-review.md，写入完整审查结论
-  4. 无论哪种情况，必须有真实的 Write 工具调用，审查结论才算已记录
-- 步骤B：执行 git add -A && git commit -m 'docs([story-id]): code review findings [skip ci]'
-- 步骤C：执行 git push
-⚠️ 自检要求：在准备结束 session 前，必须先执行 git log --oneline -3 确认本次 session 产生了至少一个新 commit。如果没有任何新 commit，说明你跳过了步骤A-C，必须立刻补救执行。
-绝对禁止仅将审查结论输出到 Thought/终端而不写入文件和提交。没有 commit 等于本次执行无效。
-
-请注意，环境已预装 gh CLI 且已配置好相关的环境与权限，你可以直接使用。"
+# ── Prompt 三级加载（优先级从高到低） ────────────────────────────────
+#
+#  1. CLAUDE_PROMPT_FILE — 文件路径（Docker -v 挂载 / K8s ConfigMap volumeMount）
+#     例: -e CLAUDE_PROMPT_FILE=/prompts/my-prompt.txt
+#         -v /host/my-prompt.txt:/prompts/my-prompt.txt:ro
+#
+#  2. CLAUDE_PROMPT — 内联字符串（Docker -e / K8s env valueFrom ConfigMapKeyRef）
+#     例: -e CLAUDE_PROMPT="$(cat custom-prompt.txt)"
+#
+#  3. /agent/default-prompt.txt — 镜像内置默认（无需任何配置）
+#
+if [ -n "${CLAUDE_PROMPT_FILE:-}" ]; then
+  if [ -f "${CLAUDE_PROMPT_FILE}" ]; then
+    PROMPT=$(cat "${CLAUDE_PROMPT_FILE}")
+    log_info "Prompt 来源: 文件 ${CLAUDE_PROMPT_FILE}"
+  else
+    log_error "CLAUDE_PROMPT_FILE 指定的文件不存在: ${CLAUDE_PROMPT_FILE}"
+    exit 1
+  fi
+elif [ -n "${CLAUDE_PROMPT:-}" ]; then
+  PROMPT="${CLAUDE_PROMPT}"
+  log_info "Prompt 来源: 环境变量 CLAUDE_PROMPT (${#PROMPT} 字符)"
+elif [ -f "/agent/default-prompt.txt" ]; then
+  PROMPT=$(cat /agent/default-prompt.txt)
+  log_info "Prompt 来源: 镜像内置默认 /agent/default-prompt.txt"
+else
+  log_error "未找到可用 Prompt：请设置 CLAUDE_PROMPT_FILE、CLAUDE_PROMPT，或确保镜像含 /agent/default-prompt.txt"
+  exit 1
+fi
 
 log_info "启动 Claude 自主执行..."
 
