@@ -164,6 +164,42 @@ GIT_REPO_URL=https://github.com/owner/repo   # 可选，省略则用命令行参
 ./k8s-run.sh --delete                            # 删除所有 CronJob
 ```
 
+**使用 anyrouter + repo-prompt-driven 创建 CronJob（常用）**
+
+适用于目标仓库有 `prompt.md` 文件、采用自驱迭代模式（而非 BMAD）的场景：
+
+```bash
+# anyrouter.env 中需包含：
+#   ANTHROPIC_AUTH_TOKEN=sk-xxx
+#   ANTHROPIC_BASE_URL=https://anyrouter.top
+#   ANTHROPIC_MODEL=claude-sonnet-4-6-20250514
+#   GIT_TOKEN=ghp_xxx
+#   GIT_REPO_URL=https://github.com/owner/repo   （目标仓库 URL）
+
+CLAUDE_PROMPT_FILE=/agent/repo-prompt-driven.txt \
+  ./k8s-run.sh --env anyrouter.env --name <name>
+```
+
+- `--env anyrouter.env` — 所有 API Key / Git Token 从 env 文件读取，直接写入 pod（无需 K8s Secret）
+- `--name <name>` — CronJob 名称，建议用仓库名缩写（如 `tetris`, `dailylogger`）
+- `CLAUDE_PROMPT_FILE=/agent/repo-prompt-driven.txt` — 使用镜像内置的自驱 prompt，Claude 会先读目标仓库的 `prompt.md`，再自主决策规划 / 开发 / 发布
+
+完整示例：
+
+```bash
+CLAUDE_PROMPT_FILE=/agent/repo-prompt-driven.txt \
+  ./k8s-run.sh --env anyrouter.env --name tetris
+```
+
+等价的 Docker 单次执行（不用 K8s）：
+
+```bash
+source anyrouter.env
+CLAUDE_PROMPT_FILE=/agent/repo-prompt-driven.txt \
+  ./run.sh "${GIT_REPO_URL}"
+```
+
+
 ## 环境变量参考
 
 | 变量 | 必填 | 说明 |

@@ -169,6 +169,8 @@ def render_inline(repo_url: str, cfg: dict, name_override: str | None = None) ->
         "GIT_TOKEN",
         "GITHUB_TOKEN",
         "GH_TOKEN",
+        "CLAUDE_PROMPT_FILE",    # 内置 prompt 文件路径（如 /agent/repo-prompt-driven.txt）
+        "CLAUDE_PROMPT",         # 内联 prompt 字符串
     ]
     env_entries = [
         {"name": "REPO_URL", "value": repo_url_final},
