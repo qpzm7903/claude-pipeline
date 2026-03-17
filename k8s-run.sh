@@ -2,16 +2,18 @@
 # k8s-run.sh - Kubernetes CronJob 管理入口
 #
 # 用法:
-#   ./k8s-run.sh                                              # 为所有 enabled repo 创建/更新 CronJob
-#   ./k8s-run.sh https://github.com/user/repo                 # 单个 repo
-#   ./k8s-run.sh --env .env.prod [repo_url]                   # 指定 env 文件（走 Secret）
-#   ./k8s-run.sh --env .env.m2.5 --name my-cj [repo_url]     # env 直接注入 pod，自定义名称，无需 Secret
-#   ./k8s-run.sh --update-secret                              # 用当前 .env 更新 K8s Secret
-#   ./k8s-run.sh --status                                     # 查看 CronJob、Job、Pod 状态
-#   ./k8s-run.sh --delete                                     # 删除所有 CronJob
-#   ./k8s-run.sh --logs                                       # 查看最近 Pod 的完整日志
-#   ./k8s-run.sh --logs -f                                    # 实时跟踪最近 Pod 的日志
-#   ./k8s-run.sh --logs <pod-name>                            # 查看指定 Pod 的日志
+#   ./k8s-run.sh                                                      # 为所有 enabled repo 创建/更新 CronJob
+#   ./k8s-run.sh https://github.com/user/repo                         # 单个 repo
+#   ./k8s-run.sh --env .env.prod [repo_url]                           # 指定 env 文件（走 Secret）
+#   ./k8s-run.sh --env .env.m2.5 --name my-cj [repo_url]             # env 直接注入 pod，自定义名称，无需 Secret
+#   ./k8s-run.sh --env .env.x --prompt agent/auto-iterate-prompt.txt  # 指定 prompt 文件
+#   ./k8s-run.sh --env .env.x --prompt agent/auto-iterate-prompt.txt --auto-iterate  # 自主迭代模式
+#   ./k8s-run.sh --update-secret                                      # 用当前 .env 更新 K8s Secret
+#   ./k8s-run.sh --status                                             # 查看 CronJob、Job、Pod 状态
+#   ./k8s-run.sh --delete                                             # 删除所有 CronJob
+#   ./k8s-run.sh --logs                                               # 查看最近 Pod 的完整日志
+#   ./k8s-run.sh --logs -f                                            # 实时跟踪最近 Pod 的日志
+#   ./k8s-run.sh --logs <pod-name>                                    # 查看指定 Pod 的日志
 #
 # 前置条件:
 #   1. kubectl 已配置并连接到目标集群
@@ -26,8 +28,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 NAMESPACE="claude-pipeline"
 ENV_FILE=""
 CRONJOB_NAME=""
+PROMPT_FILE=""
+AUTO_ITERATE_FLAG=""
 
-# 解析 --env / --name 参数（支持出现在任意位置）
+# 解析 --env / --name / --prompt / --auto-iterate 参数（支持出现在任意位置）
 REMAINING_ARGS=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -39,6 +43,14 @@ while [[ $# -gt 0 ]]; do
             CRONJOB_NAME="$2"
             shift 2
             ;;
+        --prompt)
+            PROMPT_FILE="$2"
+            shift 2
+            ;;
+        --auto-iterate)
+            AUTO_ITERATE_FLAG="true"
+            shift
+            ;;
         *)
             REMAINING_ARGS+=("$1")
             shift
@@ -47,7 +59,11 @@ while [[ $# -gt 0 ]]; do
 done
 set -- "${REMAINING_ARGS[@]+"${REMAINING_ARGS[@]}"}"
 
-# 加载 env 文件：优先用 --env 指定的，否则用默认 .env
+# 加载 env 文件：先加载默认 .env（作为基础层），再用 --env 文件覆盖
+# 这样 .env 中的 GIT_TOKEN 等在使用 --env 时依然可用
+if [ -f "${SCRIPT_DIR}/.env" ]; then
+    set -a; source "${SCRIPT_DIR}/.env"; set +a
+fi
 if [ -n "${ENV_FILE}" ]; then
     if [ ! -f "${ENV_FILE}" ]; then
         echo "❌ env 文件不存在: ${ENV_FILE}"
@@ -55,8 +71,23 @@ if [ -n "${ENV_FILE}" ]; then
     fi
     echo "[INFO] 加载 env 文件: ${ENV_FILE}"
     set -a; source "${ENV_FILE}"; set +a
-elif [ -f "${SCRIPT_DIR}/.env" ]; then
-    set -a; source "${SCRIPT_DIR}/.env"; set +a
+fi
+
+# 处理 --prompt：读取本地文件内容，设为 CLAUDE_PROMPT 环境变量
+if [ -n "${PROMPT_FILE}" ]; then
+    if [ ! -f "${PROMPT_FILE}" ]; then
+        echo "❌ prompt 文件不存在: ${PROMPT_FILE}"
+        exit 1
+    fi
+    export CLAUDE_PROMPT
+    CLAUDE_PROMPT="$(cat "${PROMPT_FILE}")"
+    echo "[INFO] 加载 prompt 文件: ${PROMPT_FILE} (${#CLAUDE_PROMPT} 字符)"
+fi
+
+# 处理 --auto-iterate
+if [ -n "${AUTO_ITERATE_FLAG}" ]; then
+    export AUTO_ITERATE=true
+    echo "[INFO] 模式: AUTO_ITERATE=true"
 fi
 
 # 读取 config.yaml 中的 namespace

@@ -96,6 +96,8 @@ def render_template(repo_url: str, cfg: dict) -> str:
         or ""
     )
 
+    job_deadline = k8s_cfg.get("job_deadline_seconds", 0)
+
     replacements = {
         "{REPO_SLUG}": slug(repo_url),
         "{REPO_URL}": repo_url,
@@ -106,12 +108,20 @@ def render_template(repo_url: str, cfg: dict) -> str:
         "{ANTHROPIC_BASE_URL}": base_url,
         "{GIT_AUTHOR_NAME}": git_cfg.get("author_name", "Claude Pipeline Bot"),
         "{GIT_AUTHOR_EMAIL}": git_cfg.get("author_email", "pipeline@claude.ai"),
-        "{JOB_DEADLINE}": str(k8s_cfg.get("job_deadline_seconds", 7200)),
+        "{JOB_DEADLINE}": str(job_deadline),
     }
 
     result = template
     for placeholder, value in replacements.items():
         result = result.replace(placeholder, value)
+
+    # job_deadline_seconds=0 表示不限制运行时间，移除 activeDeadlineSeconds 行
+    if job_deadline <= 0:
+        result = "\n".join(
+            line for line in result.splitlines()
+            if "activeDeadlineSeconds" not in line
+        )
+
     return result
 
 
@@ -171,6 +181,9 @@ def render_inline(repo_url: str, cfg: dict, name_override: str | None = None) ->
         "GH_TOKEN",
         "CLAUDE_PROMPT_FILE",    # 内置 prompt 文件路径（如 /agent/repo-prompt-driven.txt）
         "CLAUDE_PROMPT",         # 内联 prompt 字符串
+        "AUTO_ITERATE",          # true = autoresearch 无限循环模式
+        "MAX_ITERATIONS",        # 最大迭代次数（0 = 无限）
+        "ITER_COOLDOWN",         # 迭代间隔秒数
     ]
     env_entries = [
         {"name": "REPO_URL", "value": repo_url_final},
@@ -199,6 +212,15 @@ def render_inline(repo_url: str, cfg: dict, name_override: str | None = None) ->
                 env_entries.append({"name": target, "value": val})
                 seen.add(target)
 
+    job_deadline = k8s_cfg.get("job_deadline_seconds", 0)
+
+    job_spec: dict = {
+        "backoffLimit": 0,
+        "ttlSecondsAfterFinished": 3600,
+    }
+    if job_deadline > 0:
+        job_spec["activeDeadlineSeconds"] = job_deadline
+
     manifest = {
         "apiVersion": "batch/v1",
         "kind": "CronJob",
@@ -218,9 +240,7 @@ def render_inline(repo_url: str, cfg: dict, name_override: str | None = None) ->
             "failedJobsHistoryLimit": 3,
             "jobTemplate": {
                 "spec": {
-                    "backoffLimit": 0,
-                    "activeDeadlineSeconds": k8s_cfg.get("job_deadline_seconds", 7200),
-                    "ttlSecondsAfterFinished": 3600,
+                    **job_spec,
                     "template": {
                         "metadata": {"labels": {"claude-pipeline/repo": cj_slug}},
                         "spec": {
@@ -245,7 +265,12 @@ def render_inline(repo_url: str, cfg: dict, name_override: str | None = None) ->
                                         {
                                             "name": "cargo-registry-cache",
                                             "mountPath": "/home/pipeline/.cargo/registry",
-                                        }
+                                        },
+                                        {
+                                            "name": "cargo-registry-cache",
+                                            "mountPath": "/home/pipeline/.build-cache",
+                                            "subPath": "_build-cache",
+                                        },
                                     ],
                                     "env": env_entries,
                                 }

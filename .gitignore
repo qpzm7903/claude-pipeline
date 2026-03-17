@@ -27,3 +27,5 @@ _bmad/
 
 # Kubernetes 机密（真实 secret 不提交）
 k8s/secret.yaml
+
+*.env

@@ -9,6 +9,7 @@ USER root
 COPY --chown=pipeline:pipeline entrypoint.sh /agent/entrypoint.sh
 COPY --chown=pipeline:pipeline default-prompt.txt /agent/default-prompt.txt
 COPY --chown=pipeline:pipeline repo-prompt-driven.txt /agent/repo-prompt-driven.txt
+COPY --chown=pipeline:pipeline auto-iterate-prompt.txt /agent/auto-iterate-prompt.txt
 RUN chmod +x /agent/entrypoint.sh
 
 RUN mkdir -p /home/pipeline/.claude && chown pipeline:pipeline /home/pipeline/.claude

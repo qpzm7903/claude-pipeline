@@ -37,11 +37,14 @@ spec:
                   memory: "2Gi"
                   cpu: "1000m"
                 limits:
-                  memory: "8Gi"
+                  memory: "6Gi"
                   cpu: "4000m"
               volumeMounts:
                 - name: cargo-registry-cache
                   mountPath: /home/pipeline/.cargo/registry
+                - name: cargo-registry-cache
+                  mountPath: /home/pipeline/.build-cache
+                  subPath: _build-cache
               env:
                 - name: REPO_URL
                   value: "{REPO_URL}"

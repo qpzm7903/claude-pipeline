@@ -72,6 +72,18 @@ git config user.email "${GIT_AUTHOR_EMAIL:-pipeline@claude.ai}"
 BEFORE_COMMIT=$(git rev-parse HEAD 2>/dev/null || echo "")
 log_success "克隆完成"
 
+# ── Rust 编译缓存（增量编译） ─────────────────────────────────────
+_BUILD_CACHE="/home/pipeline/.build-cache"
+if [ -d "${_BUILD_CACHE}" ] && [ -w "${_BUILD_CACHE}" ]; then
+  _REPO_SLUG=$(echo "${REPO_URL}" | sed -E 's|.*github\.com[/:]||; s|\.git$||; s|/|-|g' | tr '[:upper:]' '[:lower:]')
+  export CARGO_TARGET_DIR="${_BUILD_CACHE}/${_REPO_SLUG}"
+  mkdir -p "${CARGO_TARGET_DIR}" 2>/dev/null || true
+  # 清理 7 天未使用的缓存（其他 repo 的旧缓存）
+  find "${_BUILD_CACHE}" -maxdepth 1 -mindepth 1 -type d -not -name "${_REPO_SLUG}" \
+    -mtime +7 -exec rm -rf {} \; 2>/dev/null || true
+  log_info "Build cache: ${CARGO_TARGET_DIR}"
+fi
+
 # ── stream-json 格式化脚本 ──────────────────────────────────────────
 
 cat > /tmp/fmt_stream.py << 'PYEOF'
@@ -91,19 +103,12 @@ C_DIM     = '\033[2m'         # Dim filter for results
 def p(s, end='\n'):
     print(s, end=end, flush=True)
 
-for raw in sys.stdin:
-    raw = raw.strip()
-    if not raw: continue
-    try:
-        obj = json.loads(raw)
-    except ValueError:
-        continue
-
+def process(obj):
     t = obj.get('type', '')
 
     if t == 'system' and obj.get('subtype') == 'init':
         p(f"\n{C_INFO}🚀 [Init] model={obj.get('model','')} cwd={obj.get('cwd','')}{C_RESET}")
-        continue
+        return
 
     if t == 'assistant':
         content = obj.get('message', {}).get('content', [])
@@ -122,7 +127,6 @@ for raw in sys.stdin:
             elif bt == 'tool_use':
                 name = block.get('name', '')
                 inp  = block.get('input', {})
-                # Put action inline
                 p(f"{C_ACTION}🛠️  [{name}]{C_RESET} ", end="")
                 if name == 'Bash':
                     cmd = inp.get('command', '').replace('\n', '; ')[:120]
@@ -141,7 +145,7 @@ for raw in sys.stdin:
                     p(f"📋 {len(inp.get('todos', []))} tasks")
                 else:
                     p(f"▶ {str(inp)[:80]}")
-        continue
+        return
 
     tr = obj.get('tool_use_result') or (obj if t == 'tool_result' else None)
     if tr is not None:
@@ -168,10 +172,10 @@ for raw in sys.stdin:
 
         if not has_content and not parts:
             p(f"{color}    {icon} [Success]{C_RESET}")
-            continue
+            return
 
         p(f"{color}    {icon} [Result]{C_RESET}")
-        
+
         if isinstance(tr, dict):
             if stdout:
                 lines = stdout.rstrip().splitlines()
@@ -183,7 +187,12 @@ for raw in sys.stdin:
                 for ln in stderr.rstrip().splitlines()[:10]:
                     p(f"{C_DIM}      ! {ln.strip()[:150]}{C_RESET}")
             if content and not stdout:
-                lines = content.splitlines()
+                if isinstance(content, list):
+                    lines = [str(item)[:150] for item in content]
+                elif isinstance(content, str):
+                    lines = content.splitlines()
+                else:
+                    lines = [str(content)]
                 for ln in lines[:CONTENT_LINES]:
                     p(f"{C_DIM}      | {ln.strip()[:150]}{C_RESET}")
                 if len(lines) > CONTENT_LINES:
@@ -198,7 +207,7 @@ for raw in sys.stdin:
             if text:
                 for ln in text.splitlines()[:5]:
                     p(f"{C_DIM}      | {ln.strip()[:150]}{C_RESET}")
-        continue
+        return
 
     if 'content' in obj or 'tool_use_result' in obj:
         file_obj = obj.get('file') or {}
@@ -213,13 +222,24 @@ for raw in sys.stdin:
             fp  = file_obj.get('filePath', '')
             nln = file_obj.get('numLines', '?')
             p(f"{C_DIM}      < file: {fp}  ({nln} lines){C_RESET}")
-        continue
+        return
 
     if t == 'result':
         cost = obj.get('cost_usd', 0) or 0
         turns = obj.get('num_turns', 0)
         p(f"\n{C_INFO}🏁 [结束 DONE] turns={turns} cost=${cost:.4f}{C_RESET}")
+
+for raw in sys.stdin:
+    raw = raw.strip()
+    if not raw: continue
+    try:
+        obj = json.loads(raw)
+    except ValueError:
         continue
+    try:
+        process(obj)
+    except Exception:
+        pass
 PYEOF
 
 _fmt_stream() {
@@ -263,25 +283,89 @@ else
   exit 1
 fi
 
-log_info "启动 Claude 自主执行..."
+# ── 执行 Claude ───────────────────────────────────────────────────────
+#
+# AUTO_ITERATE=true  → autoresearch 模式：崩溃重启无限循环
+# AUTO_ITERATE=false → 默认单次执行模式
+#
 
-claude \
-    --dangerously-skip-permissions \
-    --print \
-    --verbose \
-    --output-format stream-json \
-    <<< "${PROMPT}" 2>&1 | _fmt_stream
-if [ "${PIPESTATUS[0]}" -ne 0 ]; then
-    log_error "Claude 执行超时或失败"
-    exit 2
-fi
+_run_claude() {
+  claude \
+      --dangerously-skip-permissions \
+      --print \
+      --verbose \
+      --output-format stream-json \
+      <<< "${PROMPT}" 2>&1 | _fmt_stream
+  return "${PIPESTATUS[0]}"
+}
 
-log_success "Claude 自主执行完成"
+if [ "${AUTO_ITERATE:-false}" = "true" ]; then
+  # ── autoresearch 模式：无限循环 + 崩溃重启 ───────────────────────
+  _ITER=0
+  _MAX_ITER="${MAX_ITERATIONS:-0}"       # 0 = 无限
+  _COOLDOWN="${ITER_COOLDOWN:-10}"       # 迭代间隔秒
+  _CONSECUTIVE_FAILS=0
 
-AFTER_COMMIT=$(git rev-parse HEAD 2>/dev/null || echo "")
-if [ -n "$BEFORE_COMMIT" ] && [ "$BEFORE_COMMIT" = "$AFTER_COMMIT" ]; then
-    log_error "Pipeline 失败: 代码仓库没有任何新的 commit (避免 Completed 状态虚假成功)"
-    exit 3
+  log_info "模式: AUTO_ITERATE (max=${_MAX_ITER:-∞}, cooldown=${_COOLDOWN}s)"
+
+  while true; do
+    _ITER=$((_ITER + 1))
+    log_section "自主迭代 #${_ITER}"
+
+    _BEFORE=$(git rev-parse HEAD 2>/dev/null || echo "")
+
+    _EXIT=0
+    _run_claude || _EXIT=$?
+
+    _AFTER=$(git rev-parse HEAD 2>/dev/null || echo "")
+
+    if [ "$_BEFORE" != "$_AFTER" ]; then
+      log_success "迭代 #${_ITER}: 产生新 commit"
+      git push 2>/dev/null || log_warning "push 失败，下轮重试"
+      _CONSECUTIVE_FAILS=0
+    elif [ $_EXIT -ne 0 ]; then
+      _CONSECUTIVE_FAILS=$((_CONSECUTIVE_FAILS + 1))
+      log_warning "迭代 #${_ITER}: Claude 异常退出 (code=$_EXIT, 连续失败=${_CONSECUTIVE_FAILS})"
+      # 拉取远程最新代码（可能有其他 agent 的推送）
+      git pull --rebase 2>/dev/null || true
+    else
+      log_info "迭代 #${_ITER}: 无变更（Claude 正常退出）"
+      _CONSECUTIVE_FAILS=0
+    fi
+
+    # 连续失败 5 次，认为存在系统性问题，退出
+    if [ $_CONSECUTIVE_FAILS -ge 5 ]; then
+      log_error "连续 ${_CONSECUTIVE_FAILS} 次失败，退出"
+      exit 2
+    fi
+
+    # 检查是否达到最大迭代次数
+    if [ "$_MAX_ITER" -gt 0 ] && [ "$_ITER" -ge "$_MAX_ITER" ]; then
+      log_info "达到最大迭代次数 $_MAX_ITER，退出"
+      break
+    fi
+
+    sleep "$_COOLDOWN"
+  done
+
+else
+  # ── 默认单次执行模式 ────────────────────────────────────────────
+  log_info "启动 Claude 自主执行..."
+
+  _EXIT=0
+  _run_claude || _EXIT=$?
+  if [ $_EXIT -ne 0 ]; then
+      log_error "Claude 执行超时或失败"
+      exit 2
+  fi
+
+  log_success "Claude 自主执行完成"
+
+  AFTER_COMMIT=$(git rev-parse HEAD 2>/dev/null || echo "")
+  if [ -n "$BEFORE_COMMIT" ] && [ "$BEFORE_COMMIT" = "$AFTER_COMMIT" ]; then
+      log_error "Pipeline 失败: 代码仓库没有任何新的 commit (避免 Completed 状态虚假成功)"
+      exit 3
+  fi
 fi
 
 log_section "流水线完成 ✓"
