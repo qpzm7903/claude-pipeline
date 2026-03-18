@@ -332,10 +332,27 @@ if [ "${AUTO_ITERATE:-false}" = "true" ]; then
     _AFTER=$(git rev-parse HEAD 2>/dev/null || echo "")
 
     if [ "$_BEFORE" != "$_AFTER" ]; then
-      log_success "迭代 #${_ITER}: 产生新 commit"
-      git push 2>/dev/null || log_warning "push 失败，下轮重试"
-      _CONSECUTIVE_FAILS=0
-      _CONSECUTIVE_NOCHANGE=0
+      # 检查是否只有进度文件变更（非实质性工作）
+      _changed_files=$(git diff --name-only "$_BEFORE" "$_AFTER" 2>/dev/null || echo "")
+      _has_real_change=false
+      while IFS= read -r _f; do
+        case "$_f" in
+          .auto-progress.md|.claude/*) ;;  # 忽略进度/元数据文件
+          ?*) _has_real_change=true; break ;;
+        esac
+      done <<< "$_changed_files"
+
+      if [ "$_has_real_change" = "true" ]; then
+        log_success "迭代 #${_ITER}: 产生新 commit"
+        git push 2>/dev/null || log_warning "push 失败，下轮重试"
+        _CONSECUTIVE_FAILS=0
+        _CONSECUTIVE_NOCHANGE=0
+      else
+        _CONSECUTIVE_NOCHANGE=$((_CONSECUTIVE_NOCHANGE + 1))
+        log_warning "迭代 #${_ITER}: 仅进度文件变更，视为无实质工作 (连续=${_CONSECUTIVE_NOCHANGE}/${_MAX_NOCHANGE})"
+        # 仍然推送进度文件，但不重置 nochange 计数
+        git push 2>/dev/null || true
+      fi
     elif [ $_EXIT -ne 0 ] && [ $_EXIT -ne 124 ]; then
       _CONSECUTIVE_FAILS=$((_CONSECUTIVE_FAILS + 1))
       log_warning "迭代 #${_ITER}: Claude 异常退出 (code=$_EXIT, 连续失败=${_CONSECUTIVE_FAILS})"
