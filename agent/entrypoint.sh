@@ -289,30 +289,42 @@ fi
 # AUTO_ITERATE=false → 默认单次执行模式
 #
 
+_ROUND_TIMEOUT="${ROUND_TIMEOUT:-1800}"   # 每轮最大秒数（默认 30 分钟）
+
 _run_claude() {
-  claude \
+  timeout "$_ROUND_TIMEOUT" \
+    claude \
       --dangerously-skip-permissions \
       --print \
       --verbose \
       --output-format stream-json \
       <<< "${PROMPT}" 2>&1 | _fmt_stream
-  return "${PIPESTATUS[0]}"
+  local _rc="${PIPESTATUS[0]}"
+  if [ "$_rc" -eq 124 ]; then
+    log_warning "Claude 执行超时（${_ROUND_TIMEOUT}s），强制结束本轮"
+  fi
+  return "$_rc"
 }
 
 if [ "${AUTO_ITERATE:-false}" = "true" ]; then
-  # ── autoresearch 模式：无限循环 + 崩溃重启 ───────────────────────
+  # ── autoresearch 模式：单轮 Prompt + 外层循环重启 ──────────────
   _ITER=0
   _MAX_ITER="${MAX_ITERATIONS:-0}"       # 0 = 无限
   _COOLDOWN="${ITER_COOLDOWN:-10}"       # 迭代间隔秒
   _CONSECUTIVE_FAILS=0
+  _CONSECUTIVE_NOCHANGE=0
+  _MAX_NOCHANGE="${MAX_NOCHANGE:-3}"     # 连续无变更 N 次则退出
 
-  log_info "模式: AUTO_ITERATE (max=${_MAX_ITER:-∞}, cooldown=${_COOLDOWN}s)"
+  log_info "模式: AUTO_ITERATE (max=${_MAX_ITER:-∞}, cooldown=${_COOLDOWN}s, timeout=${_ROUND_TIMEOUT}s, max_nochange=${_MAX_NOCHANGE})"
 
   while true; do
     _ITER=$((_ITER + 1))
     log_section "自主迭代 #${_ITER}"
 
     _BEFORE=$(git rev-parse HEAD 2>/dev/null || echo "")
+
+    # 拉取远程最新代码（可能有其他 agent 的推送）
+    git pull --rebase 2>/dev/null || true
 
     _EXIT=0
     _run_claude || _EXIT=$?
@@ -323,13 +335,13 @@ if [ "${AUTO_ITERATE:-false}" = "true" ]; then
       log_success "迭代 #${_ITER}: 产生新 commit"
       git push 2>/dev/null || log_warning "push 失败，下轮重试"
       _CONSECUTIVE_FAILS=0
-    elif [ $_EXIT -ne 0 ]; then
+      _CONSECUTIVE_NOCHANGE=0
+    elif [ $_EXIT -ne 0 ] && [ $_EXIT -ne 124 ]; then
       _CONSECUTIVE_FAILS=$((_CONSECUTIVE_FAILS + 1))
       log_warning "迭代 #${_ITER}: Claude 异常退出 (code=$_EXIT, 连续失败=${_CONSECUTIVE_FAILS})"
-      # 拉取远程最新代码（可能有其他 agent 的推送）
-      git pull --rebase 2>/dev/null || true
     else
-      log_info "迭代 #${_ITER}: 无变更（Claude 正常退出）"
+      _CONSECUTIVE_NOCHANGE=$((_CONSECUTIVE_NOCHANGE + 1))
+      log_info "迭代 #${_ITER}: 无变更 (连续=${_CONSECUTIVE_NOCHANGE}/${_MAX_NOCHANGE})"
       _CONSECUTIVE_FAILS=0
     fi
 
@@ -337,6 +349,12 @@ if [ "${AUTO_ITERATE:-false}" = "true" ]; then
     if [ $_CONSECUTIVE_FAILS -ge 5 ]; then
       log_error "连续 ${_CONSECUTIVE_FAILS} 次失败，退出"
       exit 2
+    fi
+
+    # 连续无变更达到上限，项目已成熟，退出
+    if [ $_CONSECUTIVE_NOCHANGE -ge "$_MAX_NOCHANGE" ]; then
+      log_info "连续 ${_CONSECUTIVE_NOCHANGE} 轮无变更，项目已趋于成熟，退出"
+      break
     fi
 
     # 检查是否达到最大迭代次数

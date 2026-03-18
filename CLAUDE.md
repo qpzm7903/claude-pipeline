@@ -37,6 +37,13 @@ docker run --rm -i hadolint/hadolint < agent/Dockerfile
 ./k8s-run.sh --logs -f                     # 实时跟踪
 ./k8s-run.sh --update-secret               # 换 token 后同步 K8s Secret
 ./k8s-run.sh --delete                      # 删除所有 CronJob
+
+# Autoresearch 模式（自主迭代：单轮执行 + 外层循环重启）
+./k8s-run.sh --env .env \
+  --prompt agent/auto-iterate-prompt.txt \
+  --auto-iterate \
+  --name my-autoresearch \
+  https://github.com/owner/repo
 ```
 
 ## Architecture
