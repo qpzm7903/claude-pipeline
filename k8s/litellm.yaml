@@ -1,0 +1,187 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: litellm
+  labels:
+    app.kubernetes.io/name: litellm
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: litellm-config
+  namespace: litellm
+data:
+  config.yaml: |
+    model_list:
+      - model_name: glm-5
+        litellm_params:
+          model: anthropic/glm-5
+          api_key: os.environ/DASHSCOPE_APPS_API_KEY
+          api_base: https://coding.dashscope.aliyuncs.com/apps/anthropic
+      - model_name: qwen-plus
+        litellm_params:
+          model: openai/qwen-plus
+          api_key: os.environ/DASHSCOPE_API_KEY
+          api_base: https://dashscope.aliyuncs.com/compatible-mode/v1
+      - model_name: gpt-4o
+        litellm_params:
+          model: openai/gpt-4o
+          api_key: os.environ/OPENAI_API_KEY
+      - model_name: claude-sonnet
+        litellm_params:
+          model: anthropic/claude-sonnet-4-20250514
+          api_key: os.environ/ANTHROPIC_API_KEY
+
+    general_settings:
+      master_key: os.environ/LITELLM_MASTER_KEY
+
+    litellm_settings:
+      drop_params: true
+      set_verbose: false
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: litellm-secrets
+  namespace: litellm
+type: Opaque
+stringData:
+  LITELLM_MASTER_KEY: "sk-litellm-local-dev"
+  LITELLM_SALT_KEY: "sk-litellm-salt-key-local-dev"
+  DASHSCOPE_APPS_API_KEY: ""
+  DASHSCOPE_API_KEY: ""
+  OPENAI_API_KEY: ""
+  ANTHROPIC_API_KEY: ""
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: litellm
+  namespace: litellm
+  labels:
+    app.kubernetes.io/name: litellm
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: litellm
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: litellm
+    spec:
+      containers:
+      - name: litellm
+        image: docker.litellm.ai/berriai/litellm:main-stable
+        args:
+        - --config
+        - /app/config.yaml
+        - --port
+        - "4000"
+        ports:
+        - containerPort: 4000
+        env:
+        - name: DATABASE_URL
+          value: "postgresql://litellm:litellm@litellm-postgres:5432/litellm"
+        envFrom:
+        - secretRef:
+            name: litellm-secrets
+        volumeMounts:
+        - name: config
+          mountPath: /app/config.yaml
+          subPath: config.yaml
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "2Gi"
+            cpu: "2000m"
+        livenessProbe:
+          httpGet:
+            path: /health/liveliness
+            port: 4000
+          initialDelaySeconds: 30
+          periodSeconds: 15
+        readinessProbe:
+          httpGet:
+            path: /health/readiness
+            port: 4000
+          initialDelaySeconds: 30
+          periodSeconds: 15
+      volumes:
+      - name: config
+        configMap:
+          name: litellm-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: litellm
+  namespace: litellm
+spec:
+  type: LoadBalancer
+  ports:
+  - port: 4000
+    targetPort: 4000
+  selector:
+    app.kubernetes.io/name: litellm
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: litellm-postgres-pvc
+  namespace: litellm
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: litellm-postgres
+  namespace: litellm
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: litellm-postgres
+  template:
+    metadata:
+      labels:
+        app: litellm-postgres
+    spec:
+      containers:
+      - name: postgres
+        image: postgres:15-alpine
+        env:
+        - name: POSTGRES_USER
+          value: litellm
+        - name: POSTGRES_PASSWORD
+          value: litellm
+        - name: POSTGRES_DB
+          value: litellm
+        ports:
+        - containerPort: 5432
+        volumeMounts:
+        - name: data
+          mountPath: /var/lib/postgresql/data
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: litellm-postgres-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: litellm-postgres
+  namespace: litellm
+spec:
+  ports:
+  - port: 5432
+    targetPort: 5432
+  selector:
+    app: litellm-postgres

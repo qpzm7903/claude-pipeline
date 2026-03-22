@@ -243,5 +243,6 @@ ANTHROPIC_MODEL=qwen3.5-plus
 
 ## 相关文档
 
+- [LiteLLM Proxy 部署](./litellm-deployment.md) - LLM API 网关
 - [Rancher Dashboard 部署](./rancher-dashboard.md) - 可视化管理界面
 - [Rancher 安装指南](./rancher-installation.md) - 详细安装步骤
