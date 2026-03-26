@@ -31,6 +31,11 @@ data:
         litellm_params:
           model: anthropic/claude-sonnet-4-20250514
           api_key: os.environ/ANTHROPIC_API_KEY
+      - model_name: minimax-m2.7-highspeed
+        litellm_params:
+          model: anthropic/MiniMax-M2.7-highspeed
+          api_key: os.environ/NEWAPI_HIZUI_API_KEY
+          api_base: https://newapi.hizui.cn
 
     general_settings:
       master_key: os.environ/LITELLM_MASTER_KEY
@@ -46,12 +51,13 @@ metadata:
   namespace: litellm
 type: Opaque
 stringData:
-  LITELLM_MASTER_KEY: "sk-litellm-local-dev"
+  LITELLM_MASTER_KEY: "sk-1234"
   LITELLM_SALT_KEY: "sk-litellm-salt-key-local-dev"
   DASHSCOPE_APPS_API_KEY: ""
   DASHSCOPE_API_KEY: ""
   OPENAI_API_KEY: ""
   ANTHROPIC_API_KEY: ""
+  NEWAPI_HIZUI_API_KEY: "sk-qm34kEVuNa4ZS6jT2jcIRZwukM7FtM3BVGzCjJFh5FSB1aqQ"
 ---
 apiVersion: apps/v1
 kind: Deployment
