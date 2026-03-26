@@ -65,8 +65,8 @@ case "${PIPELINE_MODE}" in
       exit 1
     fi
     PROMPT=$(cat "${_SCRIPT_DIR}/default-prompt.txt")
-    log_info "模式: bmad（BMAD 工作流）— Prompt: default-prompt.txt"
-    _EXEC_MODE="single"
+    log_info "模式: bmad（BMAD 工作流，iterate 引擎）— Prompt: default-prompt.txt"
+    _EXEC_MODE="iterate"
     ;;
   autoresearch)
     if [ ! -f "${_SCRIPT_DIR}/auto-iterate-prompt.txt" ]; then
