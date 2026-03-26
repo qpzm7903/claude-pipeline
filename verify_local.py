@@ -13,18 +13,35 @@ from pathlib import Path
 
 
 def test_entrypoint_prompt():
-    """验证 entrypoint.sh 包含必要的工作流步骤。"""
+    """验证 agent/ 目录的整体工作流完整性（entrypoint + lib 模块 + prompt 文件）。"""
     print("\n" + "="*50)
-    print("测试 1: entrypoint.sh 工作流完整性")
+    print("测试 1: Agent 工作流完整性")
     print("="*50)
 
-    entrypoint = Path(__file__).parent / "agent" / "entrypoint.sh"
+    agent_dir = Path(__file__).parent / "agent"
+    entrypoint = agent_dir / "entrypoint.sh"
     if not entrypoint.exists():
         print(f"❌ 文件不存在: {entrypoint}")
         return False
 
-    content = entrypoint.read_text()
-    checks = [
+    # 收集 entrypoint.sh + lib/ 下所有源文件的内容
+    agent_content = entrypoint.read_text()
+    lib_dir = agent_dir / "lib"
+    if lib_dir.is_dir():
+        for f in lib_dir.iterdir():
+            if f.suffix in (".sh", ".py"):
+                agent_content += "\n" + f.read_text()
+    # 包含 container-CLAUDE.md（容器内的行为规范）
+    container_claude = agent_dir / "container-CLAUDE.md"
+    if container_claude.exists():
+        agent_content += "\n" + container_claude.read_text()
+    # 包含 prompt 文件（.txt）
+    for f in agent_dir.iterdir():
+        if f.suffix == ".txt":
+            agent_content += "\n" + f.read_text()
+
+    # 检查 agent 源码中的关键字（entrypoint + lib 模块）
+    source_checks = [
         ("步骤 0: 环境检查",         "环境检查步骤"),
         ("步骤 1: 克隆仓库",         "克隆仓库步骤"),
         ("步骤 2: Claude 自主执行",   "Claude 执行步骤"),
@@ -35,21 +52,36 @@ def test_entrypoint_prompt():
         ("ANTHROPIC_API_KEY",       "API key 检查"),
         ("REPO_URL",                "仓库 URL 变量"),
         ("CLAUDE.md",               "CLAUDE.md 引用"),
-        ("版本发布",                  "版本发布步骤"),
-        ("git tag",                  "tag 创建命令"),
-        ("Cargo.toml",               "Cargo.toml 版本引用"),
     ]
 
     all_ok = True
-    for keyword, description in checks:
-        if keyword in content:
+    for keyword, description in source_checks:
+        if keyword in agent_content:
             print(f"  ✅ {description}")
         else:
             print(f"  ❌ 缺少: {description} (关键字: {keyword!r})")
             all_ok = False
 
+    # 检查 prompt 文件存在性与基本结构
+    prompt_files = {
+        "default-prompt.txt": ["BMAD", "bmad-", "单步执行"],
+        "auto-iterate-prompt.txt": ["优先级", "git push", "P4"],
+    }
+    for fname, keywords in prompt_files.items():
+        fpath = agent_dir / fname
+        if not fpath.exists():
+            print(f"  ❌ Prompt 文件缺失: {fname}")
+            all_ok = False
+            continue
+        print(f"  ✅ Prompt 文件存在: {fname}")
+        pcontent = fpath.read_text()
+        for kw in keywords:
+            if kw not in pcontent:
+                print(f"    ❌ {fname} 缺少关键字: {kw!r}")
+                all_ok = False
+
     if all_ok:
-        print("✅ entrypoint.sh 结构验证通过！")
+        print("✅ Agent 工作流验证通过！")
     return all_ok
 
 

@@ -56,7 +56,7 @@ run_iterate() {
   local _CONSECUTIVE_NOCHANGE=0
   local _MAX_NOCHANGE="${MAX_NOCHANGE:-3}"     # 连续无变更 N 次则退出
 
-  log_info "模式: autoresearch (max=${_MAX_ITER:-∞}, cooldown=${_COOLDOWN}s, timeout=${_ROUND_TIMEOUT}s, max_nochange=${_MAX_NOCHANGE})"
+  log_info "模式: ${PIPELINE_MODE:-iterate} (max=${_MAX_ITER:-∞}, cooldown=${_COOLDOWN}s, timeout=${_ROUND_TIMEOUT}s, max_nochange=${_MAX_NOCHANGE})"
 
   while true; do
     _ITER=$((_ITER + 1))
