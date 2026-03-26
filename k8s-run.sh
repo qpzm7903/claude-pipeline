@@ -7,7 +7,8 @@
 #   ./k8s-run.sh --env .env.prod [repo_url]                           # 指定 env 文件（走 Secret）
 #   ./k8s-run.sh --env .env.m2.5 --name my-cj [repo_url]             # env 直接注入 pod，自定义名称，无需 Secret
 #   ./k8s-run.sh --env .env.x --prompt agent/auto-iterate-prompt.txt  # 指定 prompt 文件
-#   ./k8s-run.sh --env .env.x --prompt agent/auto-iterate-prompt.txt --auto-iterate  # 自主迭代模式
+#   ./k8s-run.sh --env .env.x --mode autoresearch                     # autoresearch 模式
+#   ./k8s-run.sh --env .env.x --mode custom --prompt my-prompt.txt    # 自定义 prompt 模式
 #   ./k8s-run.sh --update-secret                                      # 用当前 .env 更新 K8s Secret
 #   ./k8s-run.sh --status                                             # 查看 CronJob、Job、Pod 状态
 #   ./k8s-run.sh --delete                                             # 删除所有 CronJob
@@ -29,9 +30,9 @@ NAMESPACE="claude-pipeline"
 ENV_FILE=""
 CRONJOB_NAME=""
 PROMPT_FILE=""
-AUTO_ITERATE_FLAG=""
+MODE_FLAG=""
 
-# 解析 --env / --name / --prompt / --auto-iterate 参数（支持出现在任意位置）
+# 解析 --env / --name / --prompt / --mode 参数（支持出现在任意位置）
 REMAINING_ARGS=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -47,9 +48,9 @@ while [[ $# -gt 0 ]]; do
             PROMPT_FILE="$2"
             shift 2
             ;;
-        --auto-iterate)
-            AUTO_ITERATE_FLAG="true"
-            shift
+        --mode)
+            MODE_FLAG="$2"
+            shift 2; continue
             ;;
         *)
             REMAINING_ARGS+=("$1")
@@ -84,10 +85,10 @@ if [ -n "${PROMPT_FILE}" ]; then
     echo "[INFO] 加载 prompt 文件: ${PROMPT_FILE} (${#CLAUDE_PROMPT} 字符)"
 fi
 
-# 处理 --auto-iterate
-if [ -n "${AUTO_ITERATE_FLAG}" ]; then
-    export AUTO_ITERATE=true
-    echo "[INFO] 模式: AUTO_ITERATE=true"
+# 处理 --mode
+if [ -n "${MODE_FLAG}" ]; then
+    export PIPELINE_MODE="${MODE_FLAG}"
+    echo "[INFO] 模式: PIPELINE_MODE=${PIPELINE_MODE}"
 fi
 
 # 读取 config.yaml 中的 namespace

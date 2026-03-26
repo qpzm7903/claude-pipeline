@@ -181,7 +181,8 @@ def render_inline(repo_url: str, cfg: dict, name_override: str | None = None) ->
         "GH_TOKEN",
         "CLAUDE_PROMPT_FILE",    # 内置 prompt 文件路径（如 /agent/repo-prompt-driven.txt）
         "CLAUDE_PROMPT",         # 内联 prompt 字符串
-        "AUTO_ITERATE",          # true = autoresearch 单轮循环模式
+        "PIPELINE_MODE",         # bmad / autoresearch / custom
+        "AUTO_ITERATE",          # [deprecated] 向后兼容，请改用 PIPELINE_MODE
         "MAX_ITERATIONS",        # 最大迭代次数（0 = 无限）
         "ITER_COOLDOWN",         # 迭代间隔秒数
         "ROUND_TIMEOUT",         # 每轮最大执行秒数（默认 1800）
