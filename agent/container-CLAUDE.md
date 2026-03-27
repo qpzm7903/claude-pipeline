@@ -8,6 +8,21 @@
 - 描述具体变更内容，不能只写 "changes" 或 "update"
 - 示例：`feat(auth): add JWT refresh token support`
 
+## CI 触发规则（强制）
+
+提交时**必须**按以下规则决定是否追加 `[skip ci]`：
+
+| 提交类型 | 是否触发 CI | 要求 |
+|----------|------------|------|
+| 代码修改（`feat`/`fix`/`refactor`/`test`） | ✅ 触发 | 正常提交，不加 `[skip ci]` |
+| Release（`chore(release): bump version`）| ✅ 触发 | 正常提交，不加 `[skip ci]` |
+| 文档/规划/审查（`docs`/`chore`/`planning`/code-review 结论）| ❌ 不触发 | **必须**在 commit message 末尾加 `[skip ci]` |
+
+示例：
+- `docs(AI-007): update story status and review findings [skip ci]`
+- `chore(sprint): update sprint-status.yaml [skip ci]`
+- `feat(auth): add JWT refresh token support`（无需 skip ci）
+
 ## Context 接近上限时的紧急提交规则
 
 - 当出现 `Prompt is too long` 警告时，**立即停止当前实现工作**
