@@ -26,6 +26,7 @@ log_info "Repo:     ${REPO_URL}"
 log_info "Model:    ${ANTHROPIC_MODEL:-(default)}"
 log_info "Base URL: ${ANTHROPIC_BASE_URL:-(official)}"
 log_info "Mode:     ${PIPELINE_MODE:-(default)}"
+log_info "Exec:     ${EXEC_MODE:-(auto)}"
 
 # ── 步骤 0: 环境检查 ────────────────────────────────────────────────
 log_section "步骤 0: 环境检查"
@@ -66,7 +67,7 @@ case "${PIPELINE_MODE}" in
     fi
     PROMPT=$(cat "${_SCRIPT_DIR}/default-prompt.txt")
     log_info "模式: bmad（BMAD 工作流，iterate 引擎）— Prompt: default-prompt.txt"
-    _EXEC_MODE="iterate"
+    _EXEC_MODE="${EXEC_MODE:-iterate}"
     ;;
   autoresearch)
     if [ ! -f "${_SCRIPT_DIR}/auto-iterate-prompt.txt" ]; then
@@ -75,7 +76,7 @@ case "${PIPELINE_MODE}" in
     fi
     PROMPT=$(cat "${_SCRIPT_DIR}/auto-iterate-prompt.txt")
     log_info "模式: autoresearch（自主迭代研究）— Prompt: auto-iterate-prompt.txt"
-    _EXEC_MODE="iterate"
+    _EXEC_MODE="${EXEC_MODE:-iterate}"
     ;;
   custom)
     if [ -n "${CLAUDE_PROMPT_FILE:-}" ]; then
@@ -93,7 +94,7 @@ case "${PIPELINE_MODE}" in
       log_error "custom 模式需要设置 CLAUDE_PROMPT_FILE 或 CLAUDE_PROMPT"
       exit 1
     fi
-    _EXEC_MODE="single"
+    _EXEC_MODE="${EXEC_MODE:-single}"
     ;;
   *)
     log_error "未知 PIPELINE_MODE: ${PIPELINE_MODE}（可选: bmad, autoresearch, custom）"

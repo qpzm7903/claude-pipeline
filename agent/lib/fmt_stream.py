@@ -8,6 +8,8 @@ C_THOUGHT = '\033[38;5;245m'  # Dim gray for thoughts
 C_ACTION  = '\033[1;36m'      # Cyan for actions
 C_RESULT  = '\033[0;32m'      # Green for results
 C_INFO    = '\033[1;34m'      # Blue for info
+C_WARN    = '\033[38;5;214m'  # Orange for warnings
+C_ERR     = '\033[0;31m'      # Red for errors
 C_RESET   = '\033[0m'
 C_DIM     = '\033[2m'         # Dim filter for results
 
@@ -19,6 +21,28 @@ def process(obj):
 
     if t == 'system' and obj.get('subtype') == 'init':
         p(f"\n{C_INFO}🚀 [Init] model={obj.get('model','')} cwd={obj.get('cwd','')}{C_RESET}")
+        return
+
+    if t == 'error':
+        err_msg = obj.get('error', '')
+        if isinstance(err_msg, dict):
+            err_msg = err_msg.get('message', str(err_msg))
+        p(f"\n{C_ERR}🚨 [System Error] {err_msg}{C_RESET}")
+        return
+
+    if t == 'user':
+        content = obj.get('message', {}).get('content', [])
+        text_blocks = []
+        for block in content:
+            if isinstance(block, dict) and block.get('type') == 'text':
+                text_blocks.append(str(block.get('text', '')))
+        text = "".join(text_blocks)
+        if text:
+            # 只取第一行的一部分作为提示
+            lines = text.strip().split("\n")
+            if lines:
+                short_str = str(lines[0])[:80]
+                p(f"\n{C_INFO}👤 [User Prompt] {short_str}...{C_RESET}")
         return
 
     if t == 'assistant':
@@ -38,24 +62,23 @@ def process(obj):
             elif bt == 'tool_use':
                 name = block.get('name', '')
                 inp  = block.get('input', {})
-                p(f"{C_ACTION}🛠️  [{name}]{C_RESET} ", end="")
                 if name == 'Bash':
                     cmd = inp.get('command', '').replace('\n', '; ')[:120]
-                    p(f"$ {cmd}")
+                    p(f"    {C_ACTION}⚡ [{name}]{C_RESET} $ {cmd}")
                 elif name == 'Read':
                     fp = inp.get('file_path', '')
                     rng = f" L{inp.get('offset', '')}+{inp.get('limit', '')}" if inp.get('offset') else ""
-                    p(f"📄 {fp}{rng}")
-                elif name == 'Write' or name == 'Edit':
-                    p(f"📝 {inp.get('file_path', '')}")
+                    p(f"    {C_ACTION}📄 [{name}]{C_RESET} {fp}{rng}")
+                elif name in ('Write', 'Edit'):
+                    p(f"    {C_ACTION}📝 [{name}]{C_RESET} {inp.get('file_path', '')}")
                 elif name == 'Glob':
-                    p(f"🔍 {inp.get('pattern', '')}")
+                    p(f"    {C_ACTION}🔍 [{name}]{C_RESET} {inp.get('pattern', '')}")
                 elif name == 'Grep':
-                    p(f"🔎 {inp.get('pattern', '')} @ {inp.get('path', '.')}")
+                    p(f"    {C_ACTION}🔎 [{name}]{C_RESET} {inp.get('pattern', '')} @ {inp.get('path', '.')}")
                 elif name in ('TodoWrite', 'TodoRead'):
-                    p(f"📋 {len(inp.get('todos', []))} tasks")
+                    p(f"    {C_ACTION}📋 [{name}]{C_RESET} {len(inp.get('todos', []))} tasks")
                 else:
-                    p(f"▶ {str(inp)[:80]}")
+                    p(f"    {C_ACTION}🛠️  [{name}]{C_RESET} {str(inp)[:80]}")
         return
 
     tr = obj.get('tool_use_result') or (obj if t == 'tool_result' else None)
@@ -67,8 +90,11 @@ def process(obj):
             stdout = tr.get('stdout', '')
             stderr = tr.get('stderr', '')
             content = tr.get('content', '')
-            if str(tr.get('exitCode', '0')) != '0' and stderr:
+            
+            # Better error checking
+            if str(tr.get('exitCode', '0')) != '0' or tr.get('is_error'):
                 is_err = True
+                
             for k in ('numLines', 'totalLines', 'numFiles', 'exitCode'):
                 if k in tr: parts.append(f"{k}={tr[k]}")
             if stdout or stderr or content:
@@ -79,24 +105,29 @@ def process(obj):
             if str(tr).strip(): has_content = True
 
         icon = '❌' if is_err else '✅'
-        color = '\033[0;31m' if is_err else C_RESULT
+        color = C_ERR if is_err else C_RESULT
+        title = '[Error]' if is_err else '[Result]'
 
         if not has_content and not parts:
-            p(f"{color}    {icon} [Success]{C_RESET}")
+            p(f"{color}    {icon} {title}{C_RESET}")
             return
 
-        p(f"{color}    {icon} [Result]{C_RESET}")
+        p(f"{color}    {icon} {title}{C_RESET}")
 
         if isinstance(tr, dict):
             if stdout:
                 lines = stdout.rstrip().splitlines()
                 for ln in lines[:CONTENT_LINES]:
-                    p(f"{C_DIM}      | {ln.strip()[:150]}{C_RESET}")
+                    p(f"{C_DIM}      │ {ln.strip()[:150]}{C_RESET}")
                 if len(lines) > CONTENT_LINES:
-                    p(f"{C_DIM}      | ... ({len(lines) - CONTENT_LINES} more lines){C_RESET}")
-            if stderr and is_err:
-                for ln in stderr.rstrip().splitlines()[:10]:
-                    p(f"{C_DIM}      ! {ln.strip()[:150]}{C_RESET}")
+                    p(f"{C_DIM}      │ ... ({len(lines) - CONTENT_LINES} more lines){C_RESET}")
+            if stderr:
+                err_color = C_ERR if is_err else C_WARN
+                lines = stderr.rstrip().splitlines()
+                for ln in lines[:CONTENT_LINES]:
+                    p(f"{err_color}      │ {ln.strip()[:150]}{C_RESET}")
+                if len(lines) > CONTENT_LINES:
+                    p(f"{err_color}      │ ... ({len(lines) - CONTENT_LINES} more lines){C_RESET}")
             if content and not stdout:
                 if isinstance(content, list):
                     lines = [str(item)[:150] for item in content]
@@ -105,19 +136,19 @@ def process(obj):
                 else:
                     lines = [str(content)]
                 for ln in lines[:CONTENT_LINES]:
-                    p(f"{C_DIM}      | {ln.strip()[:150]}{C_RESET}")
+                    p(f"{C_DIM}      │ {ln.strip()[:150]}{C_RESET}")
                 if len(lines) > CONTENT_LINES:
-                    p(f"{C_DIM}      | ... ({len(lines) - CONTENT_LINES} more lines){C_RESET}")
+                    p(f"{C_DIM}      │ ... ({len(lines) - CONTENT_LINES} more lines){C_RESET}")
             if parts:
-                p(f"{C_DIM}      └─ {', '.join(parts)}{C_RESET}")
+                p(f"{C_DIM}      ╰─ {', '.join(parts)}{C_RESET}")
         elif isinstance(tr, list):
             for item in tr[:3]:
-                p(f"{C_DIM}      | {str(item)[:120]}{C_RESET}")
+                p(f"{C_DIM}      │ {str(item)[:120]}{C_RESET}")
         else:
             text = str(tr).strip()
             if text:
                 for ln in text.splitlines()[:5]:
-                    p(f"{C_DIM}      | {ln.strip()[:150]}{C_RESET}")
+                    p(f"{C_DIM}      │ {ln.strip()[:150]}{C_RESET}")
         return
 
     if 'content' in obj or 'tool_use_result' in obj:
@@ -126,9 +157,9 @@ def process(obj):
         if isinstance(content, str) and content.strip():
             lines = content.splitlines()
             for ln in lines[:CONTENT_LINES]:
-                p(f"{C_DIM}      | {ln.strip()[:150]}{C_RESET}")
+                p(f"{C_DIM}      │ {ln.strip()[:150]}{C_RESET}")
             if len(lines) > CONTENT_LINES:
-                p(f"{C_DIM}      | ... ({len(lines) - CONTENT_LINES} more lines){C_RESET}")
+                p(f"{C_DIM}      │ ... ({len(lines) - CONTENT_LINES} more lines){C_RESET}")
         elif file_obj:
             fp  = file_obj.get('filePath', '')
             nln = file_obj.get('numLines', '?')
