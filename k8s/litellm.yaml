@@ -13,11 +13,6 @@ metadata:
 data:
   config.yaml: |
     model_list:
-      - model_name: glm-5
-        litellm_params:
-          model: anthropic/glm-5
-          api_key: os.environ/DASHSCOPE_APPS_API_KEY
-          api_base: https://coding.dashscope.aliyuncs.com/apps/anthropic
       - model_name: qwen-plus
         litellm_params:
           model: openai/qwen-plus
@@ -36,7 +31,21 @@ data:
           model: anthropic/MiniMax-M2.7-highspeed
           api_key: os.environ/NEWAPI_HIZUI_API_KEY
           api_base: https://newapi.hizui.cn
-
+      - model_name: glm
+        litellm_params:
+          model: anthropic/glm-5.1
+          api_key: sk-sk66quDugX2cad8D0EB2hjbi3DvMuj2ZMrkVPtQUtAOpN0oP
+          api_base: https://mydamoxing.cn
+      - model_name: deepseek-chat
+        litellm_par :
+          model: anthropic/deepseek-chat
+          api_key: ***REVOKED-DEEPSEEK-KEY***
+          api_base: https://api.deepseek.com/anthropic
+      - model_name: deepseek-reasoner
+        litellm_par :
+          model: anthropic/deepseek-reasoner
+          api_key: ***REVOKED-DEEPSEEK-KEY***
+          api_base: https://api.deepseek.com/anthropic
     general_settings:
       master_key: os.environ/LITELLM_MASTER_KEY
 
@@ -51,12 +60,13 @@ metadata:
   namespace: litellm
 type: Opaque
 stringData:
+  # 👇 在这里直接填入所有的真实 API Key（即 All In One 环境变量配置区）
   LITELLM_MASTER_KEY: "sk-1234"
   LITELLM_SALT_KEY: "sk-litellm-salt-key-local-dev"
-  DASHSCOPE_APPS_API_KEY: ""
-  DASHSCOPE_API_KEY: ""
-  OPENAI_API_KEY: ""
-  ANTHROPIC_API_KEY: ""
+  DASHSCOPE_APPS_API_KEY: "sk-你的阿里百炼Key"
+  DASHSCOPE_API_KEY: "sk-你的通义千问Key"
+  OPENAI_API_KEY: "sk-你的OpenAI_Key"
+  ANTHROPIC_API_KEY: "sk-你的Claude_Key"
   NEWAPI_HIZUI_API_KEY: "***REVOKED-NEWAPI-KEY***"
 ---
 apiVersion: apps/v1

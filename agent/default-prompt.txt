@@ -37,7 +37,7 @@
 完成 retrospective（步骤 6/7）后，检查是否存在 `status: done` 且尚未创建版本 tag 的 story。如需发布：
 
 1. 判断 story 的 `type` 字段：`feat`/`fix`/`refactor` 需要发布；`docs`/`chore`/`planning` 跳过
-2. 读取项目版本号文件（如 `Cargo.toml`、`package.json` 等，按项目实际情况确定）
+2. 读取项目版本号配置文件（如 `package.json`、`Cargo.toml`、`pom.xml`、`pyproject.toml` 等，按项目实际技术栈确定）
 3. 语义化版本升级：`feat` → minor，`fix`/`refactor` → patch
 4. 同步更新所有版本号文件，确保一致
 5. 提交：`git add -A && git commit -m 'chore(release): bump version to vX.Y.Z'`

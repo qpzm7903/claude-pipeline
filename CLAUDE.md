@@ -57,7 +57,7 @@ docker run --rm -i hadolint/hadolint < agent/Dockerfile
 
 **Agent** (inside Docker container):
 - `agent/entrypoint.sh` — 2 步：git clone → Claude 自主执行（含代码提交、推送和创建 PR）
-- `agent/container-CLAUDE.md` — 容器内 Claude 的通用行为约束（提交规范、推送规则等）
+
 
 **核心设计原则**：Claude 全权自主决策。`entrypoint.sh` 只是启动器，不编排任何业务逻辑。所有规范（BMAD 工作流、代码质量、版本发布等）通过目标仓库的 `CLAUDE.md` 传递给 Claude。
 

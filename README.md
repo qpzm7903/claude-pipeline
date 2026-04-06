@@ -216,7 +216,7 @@ CLAUDE_PROMPT_FILE=/agent/repo-prompt-driven.txt \
 │   ├── Dockerfile.base       # 基础镜像（Rust、Node.js、claude CLI）
 │   ├── Dockerfile            # Agent 镜像（基于 base，追加 entrypoint）
 │   ├── entrypoint.sh         # 克隆 → Claude 自主执行（含提交、推送和 PR）
-│   ├── container-CLAUDE.md   # 容器内 Claude 通用规则（提交规范、推送规则等）
+
 ├── example_repo/
 │   └── CLAUDE.md             # 目标仓库 CLAUDE.md 模板（复制到你的仓库使用）
 ├── k8s/

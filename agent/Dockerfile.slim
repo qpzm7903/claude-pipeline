@@ -15,7 +15,6 @@ COPY --chown=pipeline:pipeline lib/ /agent/lib/
 RUN chmod +x /agent/entrypoint.sh /agent/lib/*.sh
 
 RUN mkdir -p /home/pipeline/.claude && chown pipeline:pipeline /home/pipeline/.claude
-COPY --chown=pipeline:pipeline container-CLAUDE.md /home/pipeline/.claude/CLAUDE.md
 
 USER pipeline
 WORKDIR /workspace

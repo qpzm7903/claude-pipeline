@@ -31,10 +31,7 @@ def test_entrypoint_prompt():
         for f in lib_dir.iterdir():
             if f.suffix in (".sh", ".py"):
                 agent_content += "\n" + f.read_text()
-    # 包含 container-CLAUDE.md（容器内的行为规范）
-    container_claude = agent_dir / "container-CLAUDE.md"
-    if container_claude.exists():
-        agent_content += "\n" + container_claude.read_text()
+
     # 包含 prompt 文件（.txt）
     for f in agent_dir.iterdir():
         if f.suffix == ".txt":

@@ -100,7 +100,7 @@ spec:
     app: litellm-postgres
 EOF
 
-echo "[2/3] 部署 LiteLLM..."
+echo "[2/3] 部署/更新 LiteLLM..."
 kubectl apply -f "$SCRIPT_DIR/litellm.yaml"
 
 echo "[3/3] 更新 Secret..."
@@ -116,8 +116,12 @@ kubectl create secret generic litellm-secrets \
     --dry-run=client -o yaml | kubectl apply -f -
 
 echo ""
+echo "[INFO] 触发 LiteLLM 滚动重启以应用最新配置或镜像..."
+kubectl rollout restart deployment litellm -n litellm || true
+
+echo ""
 echo "[INFO] 等待 Pod 就绪..."
-kubectl wait --for=condition=Ready pod -l app.kubernetes.io/name=litellm -n litellm --timeout=180s || true
+kubectl rollout status deployment litellm -n litellm --timeout=180s || true
 
 echo ""
 echo "=== 安装完成 ==="
