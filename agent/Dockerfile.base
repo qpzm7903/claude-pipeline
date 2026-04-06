@@ -1,4 +1,4 @@
-# claude-pipeline-base
+# rust-claude
 #
 # 预装所有重型依赖，避免每次任务运行时重复下载：
 #   - 构建工具链：gcc / clang / cmake / pkg-config / build-essential

@@ -1,9 +1,10 @@
-# rust-claude-pipeline
+# general-claude-pipeline
 #
-# 基于 rust-claude（预装 Rust、构建工具、claude CLI 等），
-# 仅追加 entrypoint 脚本，保持镜像层最小化。
+# 基于 general-claude-base（git / gh / claude CLI / Python），
+# 追加 entrypoint 脚本，适用于非 Rust 类通用任务。
+# 不包含：构建工具链、Rust、系统开发库。
 
-FROM rust-claude:latest
+FROM general-claude-base:latest
 
 USER root
 COPY --chown=pipeline:pipeline entrypoint.sh /agent/entrypoint.sh
