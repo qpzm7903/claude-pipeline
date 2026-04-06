@@ -42,20 +42,20 @@ build_rust() {
     echo -e "\n${BLUE}=== Building Rust Images ===${NC}"
     
     echo -e "${YELLOW}1/2: Building rust-claude:${TAG}...${NC}"
-    docker build -t "rust-claude:$TAG" -f agent/Dockerfile.base ./agent/
+    docker build -t "rust-claude:$TAG" -f agent/Dockerfile.rust-base ./agent/
     
     echo -e "${YELLOW}2/2: Building rust-claude-pipeline:${TAG}...${NC}"
-    docker build -t "rust-claude-pipeline:$TAG" -f agent/Dockerfile ./agent/
+    docker build -t "rust-claude-pipeline:$TAG" -f agent/Dockerfile.rust-agent ./agent/
 }
 
 build_general() {
     echo -e "\n${BLUE}=== Building General Images ===${NC}"
     
     echo -e "${YELLOW}1/2: Building general-claude-base:${TAG}...${NC}"
-    docker build -t "general-claude-base:$TAG" -f agent/Dockerfile.base.slim ./agent/
+    docker build -t "general-claude-base:$TAG" -f agent/Dockerfile.general-base ./agent/
     
     echo -e "${YELLOW}2/2: Building general-claude-pipeline:${TAG}...${NC}"
-    docker build -t "general-claude-pipeline:$TAG" -f agent/Dockerfile.slim ./agent/
+    docker build -t "general-claude-pipeline:$TAG" -f agent/Dockerfile.general-agent ./agent/
 }
 
 echo -e "${GREEN}Starting build for target: ${TARGET}, tag: ${TAG}${NC}"

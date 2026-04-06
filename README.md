@@ -54,10 +54,10 @@ repos:
 
 ```bash
 # 首次或 claude CLI 版本升级时才需要重建 base
-docker build -t claude-pipeline-base:latest -f agent/Dockerfile.base ./agent/
+docker build -t claude-pipeline-base:latest -f agent/Dockerfile.rust-base ./agent/
 
 # 日常代码变更只需重建 agent 层（秒级完成）
-docker build -t claude-pipeline-agent:latest ./agent/
+docker build -t claude-pipeline-agent:latest -f agent/Dockerfile.rust-agent ./agent/
 ```
 
 ### 5. 运行
@@ -213,8 +213,10 @@ CLAUDE_PROMPT_FILE=/agent/repo-prompt-driven.txt \
 
 ```
 ├── agent/
-│   ├── Dockerfile.base       # 基础镜像（Rust、Node.js、claude CLI）
-│   ├── Dockerfile            # Agent 镜像（基于 base，追加 entrypoint）
+│   ├── Dockerfile.rust-base      # 基础镜像（Rust、Node.js、claude CLI）
+│   ├── Dockerfile.rust-agent     # Agent 镜像（基于 base，追加 entrypoint）
+│   ├── Dockerfile.general-base   # 基础镜像（精简版）
+│   ├── Dockerfile.general-agent  # Agent 镜像（精简版）
 │   ├── entrypoint.sh         # 克隆 → Claude 自主执行（含提交、推送和 PR）
 
 ├── example_repo/

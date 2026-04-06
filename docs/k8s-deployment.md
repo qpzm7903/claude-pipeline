@@ -30,8 +30,8 @@
 
 ```bash
 # 1. 构建 Docker 镜像
-docker build -t claude-pipeline-base:latest -f agent/Dockerfile.base ./agent/
-docker build -t claude-pipeline-agent:latest ./agent/
+docker build -t claude-pipeline-base:latest -f agent/Dockerfile.rust-base ./agent/
+docker build -t claude-pipeline-agent:latest -f agent/Dockerfile.rust-agent ./agent/
 
 # 2. 创建 Secret（填入真实值）
 # 获取 base64 编码: echo -n 'your-api-key' | base64
@@ -48,8 +48,8 @@ kubectl apply -f k8s/secret.yaml  # 需要先从 secret.yaml.example 复制并�
 
 ```bash
 # 1. 构建 Docker 镜像
-docker build -t claude-pipeline-base:latest -f agent/Dockerfile.base ./agent/
-docker build -t claude-pipeline-agent:latest ./agent/
+docker build -t claude-pipeline-base:latest -f agent/Dockerfile.rust-base ./agent/
+docker build -t claude-pipeline-agent:latest -f agent/Dockerfile.rust-agent ./agent/
 
 # 2. 准备 env 文件
 cat > .env.myconfig << 'EOF'

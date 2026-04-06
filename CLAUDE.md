@@ -23,11 +23,11 @@ ANTHROPIC_MODEL=qwen3.5-plus \
 ./run.sh https://github.com/user/repo
 
 # Build images（两层结构：base 镜像很少变，agent 镜像每次迭代只需重建 agent 层）
-docker build -t claude-pipeline-base:latest -f agent/Dockerfile.base ./agent/
-docker build -t claude-pipeline-agent:latest ./agent/
+docker build -t claude-pipeline-base:latest -f agent/Dockerfile.rust-base ./agent/
+docker build -t claude-pipeline-agent:latest -f agent/Dockerfile.rust-agent ./agent/
 
 # Lint the Dockerfile
-docker run --rm -i hadolint/hadolint < agent/Dockerfile
+docker run --rm -i hadolint/hadolint < agent/Dockerfile.rust-agent
 
 # Kubernetes mode
 ./k8s-run.sh                               # 为所有 enabled repo 创建/更新 CronJob
@@ -69,7 +69,7 @@ docker run --rm -i hadolint/hadolint < agent/Dockerfile
 
 **Target repo CLAUDE.md is the contract**: All development rules, workflow requirements, and quality standards should be defined in the target repository's `CLAUDE.md`, not in the pipeline infrastructure. See `example_repo/CLAUDE.md` for a template.
 
-**Two-image build**: `Dockerfile.base` (Rust, Node.js, claude CLI — slow to build, rarely changes) + `Dockerfile` (entrypoint only — fast, rebuilt on every code change).
+**Two-image build**: `Dockerfile.rust-base` (Rust, Node.js, claude CLI — slow to build, rarely changes) + `Dockerfile.rust-agent` (entrypoint only — fast, rebuilt on every code change).
 
 **Environment variable priority** (high → low): host env var → `config/config.yaml` → built-in default.
 

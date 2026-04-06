@@ -62,9 +62,9 @@ fi
 echo "[1/3] 构建 Docker 镜像..."
 if ! docker images | grep -q "claude-pipeline-base"; then
     echo "  构建 base 镜像..."
-    docker build -t claude-pipeline-base:latest -f "$PROJECT_DIR/agent/Dockerfile.base" "$PROJECT_DIR/agent/"
+    docker build -t claude-pipeline-base:latest -f "$PROJECT_DIR/agent/Dockerfile.rust-base" "$PROJECT_DIR/agent/"
 fi
-docker build -t claude-pipeline-agent:latest "$PROJECT_DIR/agent/"
+docker build -t claude-pipeline-agent:latest -f "$PROJECT_DIR/agent/Dockerfile.rust-agent" "$PROJECT_DIR/agent/"
 
 echo "[2/3] 部署 Kubernetes 资源..."
 kubectl apply -f "$SCRIPT_DIR/all-in-one.yaml"
