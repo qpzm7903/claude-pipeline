@@ -29,3 +29,6 @@ _bmad/
 k8s/secret.yaml
 
 *.envdist/
+
+dist/*
+*.env
