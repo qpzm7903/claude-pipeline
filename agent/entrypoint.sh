@@ -14,7 +14,8 @@ _SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # ── 环境配置 ────────────────────────────────────────────────────────
 export ENABLE_LSP_TOOL=1
-WORKSPACE="/workspace"
+WORKSPACE="${WORKSPACE:-$(pwd)}"
+CLAUDE_CMD="${CLAUDE_CMD:-claude}"
 
 # ── 加载模块 ────────────────────────────────────────────────────────
 source "${_SCRIPT_DIR}/lib/log.sh"
@@ -27,13 +28,14 @@ log_info "Model:    ${ANTHROPIC_MODEL:-(default)}"
 log_info "Base URL: ${ANTHROPIC_BASE_URL:-(official)}"
 log_info "Mode:     ${PIPELINE_MODE:-(default)}"
 log_info "Exec:     ${EXEC_MODE:-(auto)}"
+log_info "Claude:   ${CLAUDE_CMD}"
 
 # ── 步骤 0: 环境检查 ────────────────────────────────────────────────
 log_section "步骤 0: 环境检查"
 
 [ -z "${ANTHROPIC_API_KEY:-}" ] && { log_error "ANTHROPIC_API_KEY 未设置"; exit 1; }
 [ -z "${REPO_URL:-}" ]          && { log_error "REPO_URL 未设置"; exit 1; }
-command -v claude &>/dev/null   || { log_error "claude CLI 未安装"; exit 1; }
+command -v "${CLAUDE_CMD}" &>/dev/null || { log_error "claude CLI 未找到: ${CLAUDE_CMD}（可通过 CLAUDE_CMD 环境变量指定路径）"; exit 1; }
 
 log_success "环境检查通过"
 

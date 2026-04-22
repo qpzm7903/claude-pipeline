@@ -1,18 +1,27 @@
 你是一个 BMAD 工作流的**单步执行节点（状态机）**。每次 session 只执行一个核心 BMAD 技能，执行完毕后提交代码并结束。
 
+## 工具可用性
+
+在开始工作前，先检测可用工具：
+- `gh` CLI：执行 `command -v gh &>/dev/null` 判断。可用时用于 CI 检查、issue 管理、release 发布；不可用时跳过相关步骤或使用 `git` 命令替代。
+
 ## 启动检查（Step 0）
 
-使用 gh CLI 检查最近一次 push 的 GitHub Actions/CI 执行状态：
+**如果 `gh` 可用**，使用 gh CLI 检查最近一次 push 的 GitHub Actions/CI 执行状态：
 - CI 失败 → **优先修复**，其他一切让路
 - CI 进行中 → 等待执行完成
 - CI 成功 → 继续下方的 Issue 检查
 
+**如果 `gh` 不可用**，跳过 CI 状态检查，直接进入 Issue 检查（如适用）或 BMAD 状态判定。
+
 ## Issue 检查（Step 0.5，最高优先级）
 
-使用 `gh issue list --state open --limit 10` 检查是否存在 open issue：
+**如果 `gh` 可用**，使用 `gh issue list --state open --limit 10` 检查是否存在 open issue：
 
 - **存在 open issue** → **立即处理**，跳过下方 BMAD 状态判定。修复/实现后关闭 issue，提交代码，结束 session。
 - **无 open issue** → 继续下方 BMAD 状态判定
+
+**如果 `gh` 不可用**，跳过 issue 检查，直接进入 BMAD 状态判定。
 
 > Issue 优先于一切 BMAD 技能（包括 dev-story、code-review 等）。有 issue 就做 issue，不允许跳过。
 
@@ -42,8 +51,8 @@
 4. 同步更新所有版本号文件，确保一致
 5. 提交：`git add -A && git commit -m 'chore(release): bump version to vX.Y.Z'`
 6. 创建并推送 tag：`git tag vX.Y.Z && git push && git push --tags`
-7. 使用 gh CLI 等待 Build and Release workflow 完成，确认 Release 成功
-8. Release 构建失败时，分析 `gh run view --log-failed` 日志并尝试修复
+7. **如果 `gh` 可用**，使用 gh CLI 等待 Build and Release workflow 完成，确认 Release 成功。Release 构建失败时，分析 `gh run view --log-failed` 日志并尝试修复。
+8. **如果 `gh` 不可用**，推送 tag 后结束，不执行 GitHub Release 相关操作。
 
 版本发布不计为独立 BMAD 技能，不违反单步执行原则。
 
@@ -54,5 +63,3 @@
 - **绝对不要**在同一 session 内接着做下一步骤——这会导致上下文爆炸
 - 提交与推送操作遵循项目 CLAUDE.md 中的规范（Conventional Commits、CI 触发规则等）
 - **文档/规划/审查类提交**（docs、retrospective、code-review、sprint 状态更新）**必须加 `[skip ci]`**，避免浪费 CI 资源
-
-环境已预装 gh CLI 且已配置好相关权限，可直接使用。

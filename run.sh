@@ -45,6 +45,7 @@ run_container() {
     --label claude-pipeline=true
     -v cargo-registry-cache:/home/pipeline/.cargo/registry
     -e REPO_URL="$repo_url"
+    -e WORKSPACE="/workspace"
     -e ANTHROPIC_API_KEY="$API_KEY"
     -e ANTHROPIC_AUTH_TOKEN="$API_KEY"
     -e ANTHROPIC_MODEL="$MODEL"

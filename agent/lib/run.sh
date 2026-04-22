@@ -15,7 +15,7 @@ _fmt_stream() {
 
 _run_claude() {
   timeout "$_ROUND_TIMEOUT" \
-    claude \
+    "${CLAUDE_CMD:-claude}" \
       --dangerously-skip-permissions \
       --print \
       --verbose \

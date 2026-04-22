@@ -11,12 +11,23 @@
 
 ---
 
+## 工具可用性
+
+在开始工作前，先检测可用工具：
+```bash
+command -v gh &>/dev/null && echo "gh: available" || echo "gh: not available"
+```
+后续步骤中涉及 `gh` 的操作均为条件执行——仅在 `gh` 可用时运行。
+
+---
+
 ## 启动检查（每次必须首先执行）
 
-1. **检查 CI 状态**：使用 `gh run list --limit 5` 查看最近的 GitHub Actions 运行记录。
+1. **检查 CI 状态**（仅在 `gh` 可用时）：使用 `gh run list --limit 5` 查看最近的 GitHub Actions 运行记录。
    - 如果有**失败的 workflow**，立即优先分析并修复（`gh run view --log-failed <run-id>`），修复后再继续。
    - 如果有**进行中的 workflow**，等待其完成（`gh run watch <run-id>`）。
    - CI 全绿后，才可以继续其他工作。
+   - 如果 `gh` 不可用，跳过 CI 检查，直接进入下一步。
 
 2. **理解项目当前状态**：阅读 `plan.md`（如有）了解已完成功能、当前版本、下一步计划。
 
@@ -24,8 +35,8 @@
 
 ## 决策框架（按优先级顺序判断，只执行最紧迫的一项）
 
-**优先级 0 — 修复 CI 红灯**
-若最近 workflow 失败，必须先修复，不允许在 CI 红灯下开展新功能。
+**优先级 0 — 修复 CI 红灯**（需要 `gh`）
+若最近 workflow 失败，必须先修复，不允许在 CI 红灯下开展新功能。如果 `gh` 不可用，跳过此优先级。
 
 **优先级 1 — 规划（如果缺少 plan.md 或规划不完整）**
 - 根据 prompt.md 的要求，在 `plan.md` 中创建或更新项目短期/中期/长期功能规划。
@@ -37,19 +48,19 @@
 - 运行所有测试，确保全部通过。
 - 对代码进行 Review，从架构、稳定性、性能、用户体验角度优化，移除多余代码。
 - 提交代码（每个小功能单独 commit，使用 Conventional Commits 格式）。
-- 执行 `git push` 并等待 CI 通过。
+- 执行 `git push` 并等待 CI 通过（如果 `gh` 可用，用 `gh run watch` 等待；否则直接 push）。
 
 **优先级 3 — 版本发布（如果当前迭代开发完成且 CI 全绿）**
 - 更新项目对应的所有版本配置文件（如 `package.json`、`Cargo.toml`、`pom.xml`、`pyproject.toml` 等），与新 tag 保持一致。
 - 提交版本升级：`git add -A && git commit -m 'chore(release): bump version to vX.Y.Z'`
 - 创建并推送 tag：`git tag vX.Y.Z && git push && git push --tags`
-- 用 `gh run watch` 等待 Build & Release workflow 完成，确认 GitHub Release 和产物已发布。
-- 如果 Release 构建失败，分析日志并修复，直到 Release 成功。
+- 如果 `gh` 可用，用 `gh run watch` 等待 Build & Release workflow 完成，确认 GitHub Release 和产物已发布。如果 Release 构建失败，分析日志并修复，直到 Release 成功。
+- 如果 `gh` 不可用，推送 tag 后结束，不执行 GitHub Release 相关操作。
 
 **优先级 4 — 文档与收尾**
 - 在 `plan.md` 中更新需求进展和版本状态。
 - 更新 `README.md`，反映最新功能和版本信息。
-- 关闭已解决的 GitHub Issues，在 issue 评论中说明是哪个版本修复的，并附上下载链接。
+- 如果 `gh` 可用，关闭已解决的 GitHub Issues，在 issue 评论中说明是哪个版本修复的，并附上下载链接。
 
 ---
 
@@ -60,7 +71,7 @@
 - **每次 session 必须产生至少一个新 commit**。在结束前执行 `git log --oneline -3` 确认。
   - 如果 git log 显示没有新 commit，说明你的工作没有保存，必须立刻补救。
 - **宁可发布一个小版本，也不要积压大量未发布的功能**。可用的软件比迭代计划更重要。
-- 环境已预装 `gh` CLI 且已配置好权限，可以直接使用所有 `gh` 命令。
+- 如果 `gh` CLI 可用，优先使用它进行 CI 监控、issue 管理和 release 发布；不可用时使用 `git` 命令完成核心操作。
 
 ---
 

@@ -5,14 +5,14 @@
 # 导出变量: _LOG_FILE
 # 提供函数: log_info, log_success, log_warning, log_error, log_section
 
-# ── 日志持久化：双写到 cargo-cache PVC ──────────────────────────────
-_LOG_DIR="/home/pipeline/.cargo/registry/pipeline-logs"
+# ── 日志持久化：双写到持久化目录 ──────────────────────────────────
+_LOG_DIR="${PIPELINE_LOG_DIR:-${HOME}/.pipeline/logs}"
 _LOG_FILE="/dev/null"
 mkdir -p "${_LOG_DIR}" 2>/dev/null || true
 if [ -d "${_LOG_DIR}" ] && [ -w "${_LOG_DIR}" ]; then
-  _LOG_FILE="${_LOG_DIR}/$(date +%Y%m%d-%H%M%S)-$(hostname -s 2>/dev/null || echo pod).log"
-  find "${_LOG_DIR}" -name "*.log" -printf '%T@ %p\n' 2>/dev/null \
-    | sort -n | head -n -30 | awk '{print $2}' | xargs rm -f 2>/dev/null || true
+  _LOG_FILE="${_LOG_DIR}/$(date +%Y%m%d-%H%M%S)-$(hostname -s 2>/dev/null || echo local).log"
+  # 保留最新 30 个日志文件，清理更老的（POSIX 兼容，macOS/Linux 均可用）
+  ls -1t "${_LOG_DIR}"/*.log 2>/dev/null | tail -n +31 | xargs rm -f 2>/dev/null || true
 fi
 
 # ── 颜色与日志函数 ──────────────────────────────────────────────────

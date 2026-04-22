@@ -33,7 +33,7 @@ clone_repo() {
 }
 
 setup_build_cache() {
-  local _BUILD_CACHE="/home/pipeline/.build-cache"
+  local _BUILD_CACHE="${BUILD_CACHE_DIR:-${HOME}/.pipeline/build-cache}"
   if [ -d "${_BUILD_CACHE}" ] && [ -w "${_BUILD_CACHE}" ]; then
     local _REPO_SLUG
     _REPO_SLUG=$(echo "${REPO_URL}" | sed -E 's|.*github\.com[/:]||; s|\.git$||; s|/|-|g' | tr '[:upper:]' '[:lower:]')
