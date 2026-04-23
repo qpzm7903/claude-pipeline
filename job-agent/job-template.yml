@@ -1,0 +1,185 @@
+kind: ConfigMap
+apiVersion: v1
+metadata:
+  name: __JOB_NAME__-file
+  namespace: ai
+data:
+  "run.sh": |-
+    #!/bin/bash
+
+    set -ex
+
+    # 华为内网证书配置
+    curl -k -O https://cmc-nkg-artifactory.cmc.tools.huawei.com/artifactory/cmc-software-release/Service%20CM/AbCert/latest.version/abcert
+    chmod +x abcert
+    sudo ./abcert install
+
+    # Python源国内镜像
+    pip config set global.index https://mirrors.tools.huawei.com/pypi
+    pip config set global.index-url https://mirrors.tools.huawei.com/pypi/simple
+    pip config set global.trusted-host mirrors.tools.huawei.com
+
+    # NPM源国内镜像
+    npm config set strict-ssl false
+    npm config set registry https://mirrors.tools.huawei.com/npm/
+    npm cache clean -f
+
+    # 读取CA证书并写入系统
+    mkdir -pv /opt/cloud/security/cert/ca
+    counter="0"
+    find /opt/cloud/security/cert/ca -type f -print0 | while IFS= read -r -d '' file; do
+        counter=$((counter + 1))
+        sudo ${JAVA_HOME}/bin/keytool -importcert -alias "ca-${counter}" -file ${file} -keystore ${JAVA_HOME}/lib/security/cacerts -storepass changeit -noprompt
+    done
+
+    _fmt_stream() {
+        # 仅调用 Python 脚本进行格式化，输出到 stdout
+        # 确保 python 使用非缓冲模式 (-u)，以便 tee 能实时捕获
+        python3 -u "/opt/cloud/bin/fmt_stream.py"
+    }
+
+    # 数据目录初始化
+    mkdir -pv /opt/cloud/data/claude-code/ /opt/cloud/logs/claude-code/
+
+    # 清空输出目录
+    rm -rf /opt/cloud/data/claude-code/*
+
+    # 工作目录
+    cd /opt/cloud/data/claude-code/
+
+    if [ -n "${GH_TOKEN}" ]; then
+        echo "${GH_TOKEN}" | gh auth login --with-token || true
+    fi
+
+    # 设置全局用户名
+    git config --global user.name "qwen-code"
+    # 设置全局邮箱
+    git config --global user.email "noreply@qwen-code.com"
+
+    # 检查版本
+    \qwen --version
+
+    # 执行任务
+    timeout ${ISC_CLAUDE_CODE_TIMEOUT:-"1800"} \
+        \qwen --debug --output-format stream-json --yolo -p "工作目录为: /opt/cloud/data/claude-code/ , ${ISC_CLAUDE_CODE_PROMPT}" \
+        2>&1 | tee /opt/cloud/logs/claude-code/result.txt | _fmt_stream | tee /opt/cloud/logs/claude-code/pretty.txt || true
+
+    # 获取管道中第一个命令 (timeout) 的退出码
+    if [ "${PIPESTATUS[0]}" -eq 124 ]; then
+        echo "⚠️ Claude Code 执行超时, 强制结束"
+    fi
+
+    # 打印结果
+    tail -n 1 /opt/cloud/logs/claude-code/result.txt | jq -r '.result' || true
+
+    # 打包并压缩
+    cd /opt/cloud/data/claude-code/
+    ls -alh /opt/cloud/data/
+    rm -rf /opt/cloud/data/* || true
+    rm -rf /opt/cloud/tmp/* || true
+    rm -rf /opt/cloud/bin/* || true
+
+    ls -alh /opt/cloud/data/
+
+    if [ -n "${ISC_SLEEP_TIME}" ]; then
+        sleep ${ISC_SLEEP_TIME}s
+    fi
+
+  "settings.json": |-
+    {
+      "model": {
+        "generationConfig": {
+          "timeout": 600000,
+          "contextWindowSize": 168000,
+          "enableCacheControl": true
+        }
+      }
+    }
+
+---
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: __JOB_NAME__
+  namespace: ai
+spec:
+  completions: __COMPLETIONS__
+  backoffLimit: 0
+  parallelism: __PARALLELISM__
+  template:
+    spec:
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: In
+                    values:
+                      - __NODE__
+      containers:
+        - name: __JOB_NAME__
+          image: __IMAGE__
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/bash
+          args:
+            - -c
+            - 'sh /opt/cloud/bin/run.sh'
+          env:
+            - name: "OPENAI_BASE_URL"
+              value: "__OPENAI_BASE_URL__"
+            - name: "OPENAI_API_KEY"
+              value: "__OPENAI_API_KEY__"
+            - name: "OPENAI_MODEL"
+              value: "__MODEL__"
+            - name: "ISC_CLAUDE_CODE_PROMPT"
+              value: |
+__PROMPT_CONTENT__
+            - name: "ISC_CLAUDE_CODE_TIMEOUT"
+              value: "__TIMEOUT__"
+            - name: "ISC_SLEEP_TIME"
+              value: "__SLEEP_TIME__"
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          resources:
+            requests:
+              cpu: 100m
+              memory: 500Mi
+            limits:
+              cpu: 16000m
+              memory: 32000Mi
+          volumeMounts:
+            - name: config-volume
+              subPath: run.sh
+              mountPath: /opt/cloud/bin/run.sh
+            - name: config-volume
+              subPath: settings.json
+              mountPath: /root/.qwen/settings.json
+            - name: ca-dir
+              mountPath: /opt/cloud/security/cert/ca/
+      restartPolicy: Never
+      hostNetwork: true
+      imagePullSecrets:
+        - name: default-secret
+      securityContext:
+        runAsUser: 0
+      volumes:
+        - name: config-volume
+          configMap:
+            name: __JOB_NAME__-file
+        - name: ca-dir
+          configMap:
+            name: jenkins-slave
+            items:
+              - key: HuaweiBPITRootCA.crt
+                path: HuaweiBPITRootCA.crt
+              - key: HuaweiITRootCA.crt
+                path: HuaweiITRootCA.crt
+              - key: HWITEnterpriseCA1.crt
+                path: HWITEnterpriseCA1.crt
+              - key: HWBPITEnterpriseCA1.crt
+                path: HWBPITEnterpriseCA1.crt
