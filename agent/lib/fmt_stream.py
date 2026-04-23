@@ -1,4 +1,5 @@
 import sys, json
+from datetime import datetime, timezone, timedelta
 
 TEXT_LIMIT    = 500
 CONTENT_LINES = 15
@@ -14,7 +15,12 @@ C_RESET   = '\033[0m'
 C_DIM     = '\033[2m'         # Dim filter for results
 
 def p(s, end='\n'):
-    print(s, end=end, flush=True)
+    tz = timezone(timedelta(hours=8))
+    ts = datetime.now(tz).strftime('%Y-%m-%d %H:%M:%S')
+    if s.startswith('\n'):
+        print(f"\n{C_DIM}[{ts}]{C_RESET} {s[1:]}", end=end, flush=True)
+    else:
+        print(f"{C_DIM}[{ts}]{C_RESET} {s}", end=end, flush=True)
 
 def process(obj):
     t = obj.get('type', '')
