@@ -1,0 +1,80 @@
+# Agent 真仓端到端验证 Job
+#
+# 目标：用真实代码仓 https://github.com/qpzm7903/job-demo 驱动 agent 容器完整跑一遍
+#       验证链路：Job → agent 镜像 → entrypoint.sh → git clone → claude CLI
+#                → LiteLLM (集群内 Service) → DeepSeek
+#
+# 设计原则：
+#   - PIPELINE_MODE=custom + EXEC_MODE=single：不走 BMAD 全流程，只跑单轮
+#   - prompt 明确"只读，禁止写入/提交/推送"：即使没 GIT_TOKEN 也能安全跑完
+#   - 无需 GIT_TOKEN（公开仓库 clone 无需凭证；禁止 push 也不会用到）
+#
+# 前置：
+#   - kubectl apply -f k8s/litellm.yaml 已就绪
+#   - kubectl apply -f k8s/smoke-tests/agent-smoke.yaml 验证通过（litellm-bridge Secret 已创建）
+#
+# 用法：
+#   kubectl apply -f k8s/smoke-tests/agent-real-repo.yaml
+#   kubectl -n claude-pipeline logs -f -l job-name=agent-real-repo-test
+#   kubectl -n claude-pipeline delete -f k8s/smoke-tests/agent-real-repo.yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: agent-real-repo-test
+  namespace: claude-pipeline
+spec:
+  # 调试期先不自动清理；验证稳定后再调回 600
+  # ttlSecondsAfterFinished: 600
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: agent
+        image: claude-pipeline-agent:latest
+        imagePullPolicy: IfNotPresent
+        env:
+        # ── Anthropic 兼容端点指向集群内 LiteLLM ────────────────────
+        - name: ANTHROPIC_BASE_URL
+          value: "http://litellm.litellm:4000"
+        - name: ANTHROPIC_MODEL
+          value: "deepseek-chat"
+        - name: ANTHROPIC_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: litellm-bridge
+              key: ANTHROPIC_API_KEY
+        # ── 目标仓库 ──────────────────────────────────────────────
+        - name: REPO_URL
+          value: "https://github.com/qpzm7903/job-demo"
+        # ── agent 管线模式 ────────────────────────────────────────
+        - name: PIPELINE_MODE
+          value: "custom"
+        - name: EXEC_MODE
+          value: "single"
+        - name: ROUND_TIMEOUT
+          value: "300"
+        # ── 只读验证 prompt：只读、不改、不提、不推 ───────────────
+        - name: CLAUDE_PROMPT
+          value: |
+            这是一次 agent 管线冒烟验证任务。严格遵守以下规则：
+
+            1. 只读操作：只允许 ls / cat / 读取文件，禁止任何写入、修改、删除、git add / git commit / git push
+            2. 输出要求：用中文简要回答下面 4 个问题，每题 1-2 行：
+               (a) 当前仓库根目录有哪些顶层文件和目录？
+               (b) 如果存在 README.md 或 README.rst，它的第一段在讲什么？
+               (c) 当前仓库使用的主要技术栈（语言、构建工具）是什么？依据是哪些文件？
+               (d) 如果这是一个 Java 工程，pom.xml / build.gradle 声明的 artifactId 是什么？
+            3. 禁止事项：不要规划新版本、不要创建 plan.md、不要尝试构建、不要写入任何文件。
+            4. 完成标志：回答完 4 个问题即视为任务完成，直接结束。
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        resources:
+          requests:
+            cpu: "200m"
+            memory: "1Gi"
+          limits:
+            cpu: "2000m"
+            memory: "4Gi"
