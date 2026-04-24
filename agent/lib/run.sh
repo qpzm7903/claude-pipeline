@@ -43,8 +43,13 @@ run_single() {
   local AFTER_COMMIT
   AFTER_COMMIT=$(git rev-parse HEAD 2>/dev/null || echo "")
   if [ -n "$BEFORE_COMMIT" ] && [ "$BEFORE_COMMIT" = "$AFTER_COMMIT" ]; then
-      log_error "Pipeline 失败: 代码仓库没有任何新的 commit (避免 Completed 状态虚假成功)"
-      exit 3
+      if [ "${ALLOW_NO_COMMIT:-false}" = "true" ]; then
+          log_info "本轮无新 commit，但 ALLOW_NO_COMMIT=true（只读/审查类任务），视为正常完成"
+      else
+          log_error "Pipeline 失败: 代码仓库没有任何新的 commit (避免 Completed 状态虚假成功)"
+          log_error "如果本任务本身不应产生 commit（如只读问答、代码评审），请设置环境变量 ALLOW_NO_COMMIT=true"
+          exit 3
+      fi
   fi
 }
 
