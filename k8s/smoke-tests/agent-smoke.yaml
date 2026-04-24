@@ -1,0 +1,73 @@
+# Agent 镜像 → LiteLLM 端到端冒烟测试 Job
+#
+# 用途：在 K8s 上验证 agent 容器能通过 LiteLLM 打出模型调用
+#   - 不走正常 entrypoint（需要 REPO_URL + git clone）
+#   - 直接覆盖 command，调 claude CLI --print 做最小对话
+#   - ANTHROPIC_BASE_URL 指向集群内 LiteLLM Service
+#
+# 前置：已 apply k8s/litellm.yaml，且 litellm pod Ready
+#
+# 用法：
+#   kubectl apply -f k8s/smoke-tests/agent-smoke.yaml
+#   kubectl -n claude-pipeline logs -f job/agent-smoke-test
+#   kubectl -n claude-pipeline delete -f k8s/smoke-tests/agent-smoke.yaml
+---
+# 把 LiteLLM 的 master key 从 litellm ns 复制到 claude-pipeline ns，供 Job 引用
+apiVersion: v1
+kind: Secret
+metadata:
+  name: litellm-bridge
+  namespace: claude-pipeline
+type: Opaque
+stringData:
+  # 与 litellm-secrets.LITELLM_MASTER_KEY 保持一致；生产建议用 ExternalSecrets / RBAC 拉取
+  ANTHROPIC_API_KEY: "sk-1234"
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: agent-smoke-test
+  namespace: claude-pipeline
+spec:
+  ttlSecondsAfterFinished: 120
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: smoke
+        image: claude-pipeline-agent:latest
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: ANTHROPIC_BASE_URL
+          value: "http://litellm.litellm:4000"
+        - name: ANTHROPIC_MODEL
+          value: "deepseek-chat"
+        - name: ANTHROPIC_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: litellm-bridge
+              key: ANTHROPIC_API_KEY
+        # 覆盖 entrypoint.sh（它需要 REPO_URL 且会 git clone）
+        command:
+        - bash
+        - -c
+        - |
+          set -eu
+          echo "=== Agent 容器环境 ==="
+          echo "claude CLI: $(which claude) $(claude --version)"
+          echo "node: $(node --version)"
+          echo "ANTHROPIC_BASE_URL=$ANTHROPIC_BASE_URL"
+          echo "ANTHROPIC_MODEL=$ANTHROPIC_MODEL"
+          echo ""
+          echo "=== Test A: claude --print 最小对话 ==="
+          OUT=$(claude --print --model "$ANTHROPIC_MODEL" "一句话回复：你好" 2>&1)
+          echo "$OUT"
+          echo ""
+          if echo "$OUT" | grep -qE "(你好|Hello|hi|您好)"; then
+            echo "✅ Test A 通过：agent 容器成功通过集群内 LiteLLM 调通模型"
+            exit 0
+          else
+            echo "❌ Test A 失败：未识别到预期回复"
+            exit 1
+          fi

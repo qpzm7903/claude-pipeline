@@ -1,0 +1,93 @@
+# LiteLLM 冒烟测试 Job
+#
+# 用途：验证 litellm 部署后三件事
+#   1. OpenAI 兼容端点 /v1/chat/completions 可用
+#   2. Anthropic 兼容端点 /v1/messages 可用（agent 容器走这个）
+#   3. Claude 模型名别名（claude-sonnet-4-6）能透明路由到 deepseek
+#
+# 用法：
+#   kubectl apply -f k8s/smoke-tests/litellm-smoke.yaml
+#   kubectl -n litellm logs -f job/litellm-smoke-test
+#   kubectl -n litellm delete -f k8s/smoke-tests/litellm-smoke.yaml   # 清理
+#
+# 注：Job 设置了 ttlSecondsAfterFinished=120，完成后 2 分钟自动删除。
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: litellm-smoke-test
+  namespace: litellm
+spec:
+  ttlSecondsAfterFinished: 120
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: smoke
+        image: curlimages/curl:latest
+        env:
+        - name: LITELLM_MASTER_KEY
+          valueFrom:
+            secretKeyRef:
+              name: litellm-secrets
+              key: LITELLM_MASTER_KEY
+        command:
+        - sh
+        - -c
+        - |
+          set -eu
+          BASE="http://litellm.litellm:4000"
+          KEY="$LITELLM_MASTER_KEY"
+          FAIL=0
+
+          run_test() {
+            local name="$1"; local path="$2"; local auth_header="$3"; local payload="$4"
+            echo ""
+            echo "========================================================"
+            echo "  $name"
+            echo "========================================================"
+            code=$(curl -sS -o /tmp/resp.json -w "%{http_code}" -X POST "$BASE$path" \
+              -H "$auth_header" \
+              -H "anthropic-version: 2023-06-01" \
+              -H "Content-Type: application/json" \
+              -d "$payload" \
+              --max-time 30)
+            echo "HTTP_CODE=$code"
+            head -c 400 /tmp/resp.json; echo
+            if [ "$code" != "200" ]; then
+              echo "❌ $name 失败"
+              FAIL=$((FAIL+1))
+            else
+              echo "✅ $name 通过"
+            fi
+          }
+
+          run_test "Test 1: OpenAI /v1/chat/completions (deepseek-chat)" \
+            "/v1/chat/completions" \
+            "Authorization: Bearer $KEY" \
+            '{"model":"deepseek-chat","messages":[{"role":"user","content":"reply pong"}],"max_tokens":20}'
+
+          run_test "Test 2: Anthropic /v1/messages (deepseek-chat)" \
+            "/v1/messages" \
+            "x-api-key: $KEY" \
+            '{"model":"deepseek-chat","max_tokens":20,"messages":[{"role":"user","content":"reply pong"}]}'
+
+          run_test "Test 3: Claude 别名 (claude-sonnet-4-6)" \
+            "/v1/messages" \
+            "x-api-key: $KEY" \
+            '{"model":"claude-sonnet-4-6","max_tokens":20,"messages":[{"role":"user","content":"reply pong"}]}'
+
+          run_test "Test 4: Claude 别名 (claude-opus-4-7, 走 reasoner)" \
+            "/v1/messages" \
+            "x-api-key: $KEY" \
+            '{"model":"claude-opus-4-7","max_tokens":20,"messages":[{"role":"user","content":"reply pong"}]}'
+
+          echo ""
+          echo "========================================================"
+          if [ $FAIL -eq 0 ]; then
+            echo "🎉 全部 4 项 LiteLLM smoke 测试通过"
+            exit 0
+          else
+            echo "❌ 失败 $FAIL 项"
+            exit 1
+          fi
