@@ -1,0 +1,151 @@
+# Phase 3: OAuth2 Server 重构验证
+#
+# 前置：Phase 1 已完成，仓库 https://github.com/qpzm7903/job-demo 含 v0.5.x
+# 目标：用 task-refactor.md 对 Phase 1 产出的代码做小范围重构
+#       验证所有测试通过 → 提交 → push
+#
+# 关键修正（相对 Phase 1）：
+#   - CLAUDE_PROMPT 明确禁止 AI 署名（对齐 job-agent/prompts/base-system.md）
+#   - 设置 MAX_ITERATIONS=3 + MAX_NOCHANGE=1：重构类任务不该跑多轮
+#
+# 用法：
+#   kubectl apply -f k8s/smoke-tests/oauth2-refactor.yaml
+#   kubectl -n claude-pipeline logs -f -l job-name=oauth2-refactor
+#   kubectl -n claude-pipeline delete -f k8s/smoke-tests/oauth2-refactor.yaml
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: oauth2-refactor-prompt
+  namespace: claude-pipeline
+data:
+  prompt.md: |
+    你是一个代码重构 Agent。本轮目标：对 job-demo 仓库做 **1 次** 小范围代码重构。
+
+    ## 重构不变量（红线，不可越过）
+    - 所有现有测试必须全部通过（重构前后）
+    - Public API 不变：REST 端点 / HTTP 方法 / 响应结构 / 异常类型 一律不变
+    - 功能行为不变：/oauth2/token / /oauth2/jwks / /hello / authorization_code 流 全部照常工作
+
+    ## 本轮必须执行的 5 步
+
+    ### 1. Map（绘制地图）
+    - 扫 src/main/java 下的文件，找出以下代码异味中最严重的那个：
+      * 过长方法（> 40 行）
+      * 过大类（> 300 行 或 > 10 方法）
+      * 重复代码块
+      * 过深嵌套（> 3 层）
+      * 命名不清（如 doThing / handle / process 等）
+    - 输出你选中的目标文件和行号
+
+    ### 2. Plan（决策块）
+    输出形如：
+    ```
+    ## 决策: 重构 <目标方法或类>
+    - 异味: <具体描述>
+    - 手法: Extract Method / Extract Class / Rename / Remove Duplication 中的 1 个
+    - 影响: <涉及的文件>
+    - 风险: <可能破坏的测试或行为>
+    ```
+
+    ### 3. Baseline（建立测试基线）
+    ```
+    mvn test > /tmp/baseline.log 2>&1; echo "EXIT=$?" >> /tmp/baseline.log; tail -5 /tmp/baseline.log
+    ```
+    如果基线已失败，本轮目标改为"修复基线"（用 fix 类型提交），不做重构。
+
+    ### 4. Execute（执行）
+    - 只做 1 个重构手法，不得同时做多个
+    - 只动源码和测试，不动 pom.xml / plan.md / README.md（本轮不升版本号）
+    - 修改的地方加简明中文注释说明"为什么这样重构"
+
+    ### 5. Verify + Commit
+    ```
+    mvn test > /tmp/after.log 2>&1; echo "EXIT=$?" >> /tmp/after.log; tail -5 /tmp/after.log
+    ```
+    - 通过 → git add + commit + push
+    - 失败 → git checkout -- . 回滚本轮改动，本轮以"重构未成功"结束（仍可 commit 一条 docs/notes 说明原因）
+
+    ## Commit 规范（**严格执行**）
+    - 格式：`refactor(<范围>): <描述>` —— 简体中文
+    - **严格禁止** 任何表明由 AI 生成的文字（禁止 Co-Authored-By: Claude、禁止 Written by AI）
+    - 不附加 Signed-off-by 行
+    - 作者：使用 git 默认用户（已配置为 qpzm7903）
+
+    ## 禁止事项
+    - 禁止新增功能（那是 feature-dev 的事）
+    - 禁止升 pom 版本号
+    - 禁止改 API（路径、方法、参数、返回结构）
+    - 禁止做 "大重构"（涉及 3+ 文件结构变更）—— 必须 1 个小手法
+    - 禁止改动 Spring Authorization Server 的 bean 配置（可能破坏授权流）
+
+    现在开始。如果找不到值得重构的地方（代码已经够干净），就直接 commit 一条 `docs(refactor): 代码质量评估说明`，附一份 200 字内评估报告到 `docs/refactor-review-$(date +%Y%m%d).md`，本轮结束。
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: oauth2-refactor
+  namespace: claude-pipeline
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: agent
+        image: claude-pipeline-agent:latest
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: ANTHROPIC_BASE_URL
+          value: "http://litellm.litellm:4000"
+        - name: ANTHROPIC_MODEL
+          value: "deepseek-chat"
+        - name: ANTHROPIC_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: litellm-bridge
+              key: ANTHROPIC_API_KEY
+        - name: REPO_URL
+          value: "https://github.com/qpzm7903/job-demo"
+        - name: GIT_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: github-token
+              key: GIT_TOKEN
+        - name: GIT_AUTHOR_NAME
+          value: "qpzm7903"
+        - name: GIT_AUTHOR_EMAIL
+          value: "noreply@qpzm7903.local"
+        - name: PIPELINE_MODE
+          value: "custom"
+        - name: EXEC_MODE
+          value: "iterate"
+        - name: CLAUDE_PROMPT_FILE
+          value: "/prompts/prompt.md"
+        - name: ROUND_TIMEOUT
+          value: "600"
+        - name: MAX_ITERATIONS
+          value: "3"          # 重构类任务最多 3 轮
+        - name: MAX_NOCHANGE
+          value: "1"          # 一轮无变更就退出
+        - name: ITER_COOLDOWN
+          value: "10"
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        resources:
+          requests:
+            cpu: "500m"
+            memory: "2Gi"
+          limits:
+            cpu: "4000m"
+            memory: "8Gi"
+        volumeMounts:
+        - name: prompt
+          mountPath: /prompts
+          readOnly: true
+      volumes:
+      - name: prompt
+        configMap:
+          name: oauth2-refactor-prompt
