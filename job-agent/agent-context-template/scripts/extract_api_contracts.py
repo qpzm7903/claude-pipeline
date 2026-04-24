@@ -25,8 +25,11 @@ CLASS_RE = re.compile(r"(?:public\s+)?class\s+(\w+)")
 CLASS_MAPPING_RE = re.compile(
     r'@RequestMapping\s*\(\s*(?:value\s*=\s*|path\s*=\s*)?"?([^")]*)'
 )
+# 只匹配方法级的映射注解；@RequestMapping 专用于类级，避免与 CLASS_MAPPING_RE 冲突。
+# 允许无括号形式（如 `@PostMapping` 单独一行），group 2 在此情形为 None。
 METHOD_ANN_RE = re.compile(
-    r'@(Get|Post|Put|Delete|Patch|Request)Mapping\s*\(\s*(?:value\s*=\s*|path\s*=\s*)?"?([^"),]*)'
+    r'@(Get|Post|Put|Delete|Patch)Mapping\b'
+    r'(?:\s*\(\s*(?:value\s*=\s*|path\s*=\s*)?"?([^"),]*))?'
 )
 METHOD_NAME_RE = re.compile(r"\b(?:public)\s+\S[\S\s]*?\s+(\w+)\s*\(")
 
@@ -91,9 +94,7 @@ def parse_file(path: Path) -> Optional[ControllerInfo]:
         m = METHOD_ANN_RE.search(s)
         if m:
             http = m.group(1).upper()
-            if http == "REQUEST":
-                http = "ANY"
-            path_part = m.group(2).strip("/")
+            path_part = (m.group(2) or "").strip("/")
             pending.append((http, path_part))
             continue
 
