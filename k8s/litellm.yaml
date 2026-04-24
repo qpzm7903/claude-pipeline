@@ -31,14 +31,24 @@ data:
           api_base: https://api.deepseek.com/anthropic
       - model_name: claude-sonnet-4-6
         litellm_params:
-          model: anthropic/deepseek-chat
-          api_key: os.environ/DEEPSEEK_API_KEY
-          api_base: https://api.deepseek.com/anthropic
+          model: anthropic/glm-5.1
+          api_key: os.environ/ARK_API_KEY
+          api_base: https://ark.cn-beijing.volces.com/api/coding
       - model_name: claude-opus-4-7
         litellm_params:
-          model: anthropic/deepseek-reasoner
-          api_key: os.environ/DEEPSEEK_API_KEY
-          api_base: https://api.deepseek.com/anthropic
+          model: anthropic/glm-5.1
+          api_key: os.environ/ARK_API_KEY
+          api_base: https://ark.cn-beijing.volces.com/api/coding
+      - model_name: glm-5.1
+        litellm_params:
+          model: anthropic/glm-5.1
+          api_key: os.environ/ARK_API_KEY
+          api_base: https://ark.cn-beijing.volces.com/api/coding
+      - model_name: kimi-k2.6
+        litellm_params:
+          model: anthropic/kimi-k2.6
+          api_key: os.environ/ARK_API_KEY
+          api_base: https://ark.cn-beijing.volces.com/api/coding
     general_settings:
       master_key: os.environ/LITELLM_MASTER_KEY
     litellm_settings:
@@ -61,6 +71,7 @@ stringData:
   OPENAI_API_KEY: "sk-你的OpenAI_Key"
   ANTHROPIC_API_KEY: "sk-你的Claude_Key"
   NEWAPI_HIZUI_API_KEY: "***REVOKED-NEWAPI-KEY***"
+  ARK_API_KEY: "***REVOKED-ARK-KEY***"
 ---
 apiVersion: apps/v1
 kind: Deployment
