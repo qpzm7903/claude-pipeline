@@ -1,0 +1,134 @@
+# Phase 6: 反向问答验证（只读，ALLOW_NO_COMMIT）
+#
+# 用途：
+#   验证 .agent-context/ 的质量——让 agent 只靠 .agent-context/ 回答业务问题，
+#   如果能答对 80% 且准确指出剩余缺口，说明业务地图合格；否则说明地图有"假知识"或"抽象过度"。
+#
+# 前置：
+#   - Phase 5 已完成：job-demo main 上已有 .agent-context/ 目录
+#   - java-claude-pipeline 镜像已含 ALLOW_NO_COMMIT 补丁
+#
+# 用法：
+#   kubectl apply -f k8s/smoke-tests/oauth2-qa.yaml
+#   kubectl -n claude-pipeline logs -f -l job-name=oauth2-qa
+#   kubectl -n claude-pipeline delete -f k8s/smoke-tests/oauth2-qa.yaml
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: oauth2-qa-prompt
+  namespace: claude-pipeline
+data:
+  prompt.md: |
+    你是一个代码评审 Agent。本轮**只读任务**，不允许任何写操作。
+
+    ## 硬约束（红线）
+    - **禁止任何 write / edit / create / delete 操作**
+    - **禁止 git add / commit / push / tag**
+    - **禁止 mvn / 任何构建命令**（本轮不验证构建，只回答问题）
+    - 只允许：ls / cat / grep / find / git log / git show
+
+    ## 任务
+
+    严格**优先读取 .agent-context/** 目录，仅在信息缺失时才查看源码。
+    回答以下 8 个问题，每题格式：
+
+    ```
+    Q<N>: <问题>
+    A: <答案>
+    来源: <引用哪个文件、哪一段，精确到行号或小节>
+    置信度: <high / medium / low>
+    ```
+
+    ### 问题清单
+
+    1. 本项目有哪些自定义 Controller？分别暴露什么端点？
+    2. `/oauth2/token` 和 `/oauth2/jwks` 端点是怎么注册的？它们的代码锚点是什么？
+    3. 内置了哪些 OAuth2 客户端？每个支持哪些授权类型？
+    4. `/oauth2/jwks` 端点是否启用了 HTTP 缓存？如果有，参数是什么？
+    5. Access Token 的有效期多久？在哪里配置？
+    6. 本项目的 controller 层是否允许依赖 config 层？依据是什么？
+    7. 测试文件总共有哪些？`OAuth2IntegrationTest` 覆盖了什么场景？
+    8. 如果要新增一个"保护资源"端点（需要 access_token 鉴权），需要改哪些文件？（只列清单，不动代码）
+
+    ## 结尾总结
+
+    最后输出一段 **≤150 字** 的评估：
+    - `.agent-context/` 质量评分（A / B / C）
+    - 发现的**缺失信息**（要补的是什么）
+    - 发现的**错误或过时信息**（如果有）
+
+    ## 禁止事项
+
+    - 禁止回答时编造 —— 找不到就写 `无法确定：.agent-context 和源码均未提及`
+    - 禁止跳过 `.agent-context/` 直接读源码（必须先读 context 再看源码）
+    - 禁止产出除终端输出外的任何文件
+
+    本任务完成即视为成功，**无需 commit**。pipeline 已设置 ALLOW_NO_COMMIT=true。
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: oauth2-qa
+  namespace: claude-pipeline
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: agent
+        image: java-claude-pipeline:latest
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: ANTHROPIC_BASE_URL
+          value: "http://litellm.litellm:4000"
+        - name: ANTHROPIC_MODEL
+          value: "deepseek-chat"
+        - name: ANTHROPIC_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: litellm-bridge
+              key: ANTHROPIC_API_KEY
+        - name: REPO_URL
+          value: "https://github.com/qpzm7903/job-demo"
+        # 本 Job 不做任何 push，但 entrypoint.sh 仍需凭证克隆公共仓（无 token 也能克隆，此处保留保险）
+        - name: GIT_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: github-token
+              key: GIT_TOKEN
+        - name: GIT_AUTHOR_NAME
+          value: "qpzm7903"
+        - name: GIT_AUTHOR_EMAIL
+          value: "noreply@qpzm7903.local"
+        - name: PIPELINE_MODE
+          value: "custom"
+        - name: EXEC_MODE
+          value: "single"           # 单轮，不迭代
+        - name: CLAUDE_PROMPT_FILE
+          value: "/prompts/prompt.md"
+        - name: ROUND_TIMEOUT
+          value: "400"
+        # ★ 核心开关：允许本轮无新 commit，守门检查放行
+        - name: ALLOW_NO_COMMIT
+          value: "true"
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        resources:
+          requests:
+            cpu: "300m"
+            memory: "1Gi"
+          limits:
+            cpu: "2000m"
+            memory: "4Gi"
+        volumeMounts:
+        - name: prompt
+          mountPath: /prompts
+          readOnly: true
+      volumes:
+      - name: prompt
+        configMap:
+          name: oauth2-qa-prompt
