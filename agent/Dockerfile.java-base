@@ -1,0 +1,60 @@
+# java-claude-base
+#
+# 基于 general-claude-base（git / gh / claude CLI / Python），
+# 追加 JDK 17 + Maven 3.9.x，供 Java 工程类任务使用。
+#
+# 构建：
+#   docker build -t java-claude-base:latest -f agent/Dockerfile.java-base ./agent/
+#
+# 依赖前置：先构建 general-claude-base:latest
+#   docker build -t general-claude-base:latest -f agent/Dockerfile.general-base ./agent/
+
+FROM general-claude-base:latest
+
+USER root
+
+ENV JAVA_HOME=/usr/lib/jvm/temurin-17-jdk-amd64
+ENV MAVEN_HOME=/opt/apache-maven-3.9.9
+ENV PATH=${JAVA_HOME}/bin:${MAVEN_HOME}/bin:${PATH}
+
+# ── 1. Eclipse Temurin JDK 17（官方发行，带 LTS）────────────────────
+# Temurin 官方 apt 仓库；指定具体架构避免 multiarch 解析冲突。
+RUN set -eux; \
+    ARCH="$(dpkg --print-architecture)"; \
+    case "$ARCH" in \
+        amd64)  JDK_ARCH="amd64" ;; \
+        arm64)  JDK_ARCH="arm64" ;; \
+        *) echo "不支持的架构: $ARCH" && exit 1 ;; \
+    esac; \
+    curl -fsSL https://packages.adoptium.net/artifactory/api/gpg/key/public \
+        | gpg --dearmor -o /usr/share/keyrings/adoptium.gpg; \
+    echo "deb [arch=${JDK_ARCH} signed-by=/usr/share/keyrings/adoptium.gpg] https://packages.adoptium.net/artifactory/deb jammy main" \
+        > /etc/apt/sources.list.d/adoptium.list; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends temurin-17-jdk; \
+    rm -rf /var/lib/apt/lists/*; \
+    # JAVA_HOME 按架构修正（上面的 ENV 按 amd64 写死，这里做兼容）
+    if [ "$ARCH" = "arm64" ]; then \
+        ln -sfn /usr/lib/jvm/temurin-17-jdk-arm64 /usr/lib/jvm/temurin-17-jdk-amd64; \
+    fi; \
+    java --version; \
+    javac --version
+
+# ── 2. Maven 3.9.9 ────────────────────────────────────────────────
+RUN set -eux; \
+    MVN_VERSION="3.9.9"; \
+    curl -fsSL "https://archive.apache.org/dist/maven/maven-3/${MVN_VERSION}/binaries/apache-maven-${MVN_VERSION}-bin.tar.gz" \
+        -o /tmp/maven.tar.gz; \
+    tar -xzf /tmp/maven.tar.gz -C /opt/; \
+    rm /tmp/maven.tar.gz; \
+    ln -s "/opt/apache-maven-${MVN_VERSION}" /opt/apache-maven; \
+    mvn --version
+
+# ── 3. 给 pipeline 用户的 ~/.m2 预建 + 宽松权限 ─────────────────
+RUN mkdir -p /home/pipeline/.m2 && \
+    chown -R pipeline:pipeline /home/pipeline/.m2
+
+USER pipeline
+WORKDIR /workspace
+
+# 冒烟：镜像内直接跑 `java --version && mvn --version` 应当成功
