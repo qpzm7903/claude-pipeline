@@ -93,7 +93,7 @@ spec:
       restartPolicy: Never
       containers:
       - name: agent
-        image: claude-pipeline-agent:latest
+        image: java-claude-pipeline:latest
         imagePullPolicy: IfNotPresent
         env:
         - name: ANTHROPIC_BASE_URL
