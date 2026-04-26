@@ -1,0 +1,88 @@
+# 小说创作任务 — 灵笼多元世界穿越
+#
+# 合并命令:
+#   bash job-agent/assemble.sh job-agent/tasks/novel-lingcage/job.yml
+#
+# 特点: 使用自定义 run-multi-agent.sh，串行调用 Planner → Writer → Lore Master 三个 agent
+#
+# assemble: run.sh=tasks/novel-lingcage/run.sh
+# assemble: prompt.md=tasks/novel-lingcage/prompt.md
+
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: novel-lingcage
+  namespace: default
+spec:
+  completions: 20
+  backoffLimit: 0
+  parallelism: 1
+  template:
+    spec:
+      restartPolicy: Never
+      hostNetwork: false
+      containers:
+        - name: agent
+          image: general-claude-pipeline:latest
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/bash"]
+          args: ["-c", "bash /pipeline/run.sh"]
+          env:
+            # ── 模型：GLM 5.1 via LiteLLM ───────────────────────────
+            - name: ANTHROPIC_BASE_URL
+              value: "http://litellm.litellm.svc.cluster.local:4000"
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: litellm-bridge
+                  key: ANTHROPIC_API_KEY
+            - name: ANTHROPIC_MODEL
+              value: "claude-sonnet-4-6"
+            # ── 小说 Multi-Agent 各角色模型 ──────────────────────────
+            - name: PLANNER_MODEL
+              value: "glm-5.1"
+            - name: WRITER_MODEL
+              value: "kimi-k2.6"
+            - name: LOREMASTER_MODEL
+              value: "glm-5.1"
+            # ── Git ──────────────────────────────────────────────────
+            - name: GH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: github-token
+                  key: GIT_TOKEN
+            - name: REPO_URL
+              value: "https://github.com/qpzm7903/novel-1"
+            - name: GIT_AUTHOR_NAME
+              value: "novel-bot"
+            - name: GIT_AUTHOR_EMAIL
+              value: "noreply@novel-bot.com"
+            # ── 执行参数 ──────────────────────────────────────────────
+            - name: ROUND_TIMEOUT
+              value: "7200"
+            - name: ISC_SLEEP_TIME
+              value: "60"
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          resources:
+            requests:
+              cpu: 100m
+              memory: 500Mi
+            limits:
+              cpu: 2000m
+              memory: 4Gi
+          volumeMounts:
+            - name: pipeline-config
+              subPath: run.sh
+              mountPath: /pipeline/run.sh
+            - name: pipeline-config
+              subPath: prompt.md
+              mountPath: /pipeline/prompt.md
+      volumes:
+        - name: pipeline-config
+          configMap:
+            name: novel-lingcage-config
+            defaultMode: 0755

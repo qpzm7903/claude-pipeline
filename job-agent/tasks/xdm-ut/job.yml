@@ -1,0 +1,85 @@
+# xdm-f-core 单测生成任务
+#
+# 合并命令:
+#   bash job-agent/assemble.sh job-agent/tasks/xdm-ut/job.yml
+#
+# 生成后:
+#   kubectl apply -f job-agent/dist/xdm-f-core-ut.yml
+
+# ── 合并配置（assemble.sh 读取的元数据）─────────────────────────────
+# assemble: run.sh=components/run.sh
+# assemble: prompt.md=tasks/xdm-ut/prompt.md
+
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: xdm-f-core-ut
+  namespace: claude-pipeline
+spec:
+  completions: 5
+  backoffLimit: 0
+  parallelism: 1
+  template:
+    spec:
+      restartPolicy: Never
+      hostNetwork: false
+      containers:
+        - name: agent
+          image: general-claude-pipeline:latest
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/bash"]
+          args: ["-c", "bash /pipeline/run.sh"]
+          env:
+            # ── 模型：GLM 5.1 via LiteLLM ───────────────────────────
+            - name: ANTHROPIC_BASE_URL
+              value: "http://litellm.litellm.svc.cluster.local:4000"
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: litellm-bridge
+                  key: ANTHROPIC_API_KEY
+            - name: ANTHROPIC_MODEL
+              value: "claude-sonnet-4-6"
+            # ── Git ──────────────────────────────────────────────────
+            - name: REPO_URL
+              value: "http://xdm:12345678@100.94.167.151:3020/xdm/xdm-f-core.git"
+            - name: GIT_AUTHOR_NAME
+              value: "claude-pipeline"
+            - name: GIT_AUTHOR_EMAIL
+              value: "noreply@claude.local"
+            # ── 执行参数 ──────────────────────────────────────────────
+            - name: EXEC_MODE
+              value: "single"
+            - name: ROUND_TIMEOUT
+              value: "7200"
+            # ── 路径（与 ConfigMap 挂载点对应）─────────────────────────
+            - name: WORKSPACE
+              value: "/workspace/data"
+            - name: LOGS_DIR
+              value: "/workspace/logs"
+            - name: PROMPT_FILE
+              value: "/pipeline/prompt.md"
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          resources:
+            requests:
+              cpu: 100m
+              memory: 500Mi
+            limits:
+              cpu: 16000m
+              memory: 32Gi
+          volumeMounts:
+            - name: pipeline-config
+              subPath: run.sh
+              mountPath: /pipeline/run.sh
+            - name: pipeline-config
+              subPath: prompt.md
+              mountPath: /pipeline/prompt.md
+      volumes:
+        - name: pipeline-config
+          configMap:
+            name: xdm-f-core-ut-config
+            defaultMode: 0755

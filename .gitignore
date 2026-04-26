@@ -32,3 +32,6 @@ k8s/secret.yaml
 
 dist/*
 *.env
+
+dist
+job-agent/dist
