@@ -6,6 +6,7 @@ metadata:
 data:
   "prompt.md": |-
     # 小说创作指令
+    - 整本小说在50w字以内
     - 必须按照本文件（prompt.md）中的开发流程完成本次小说章节的更新。
     - 本次任务必须完成 10 章小说内容的续写（如果是首次运行，则从第1章开始写）。
     - 故事主线：以穿越《灵笼》世界（末日废土、灯塔、噬极兽等元素）为主线，主角同时具备穿越其他多元世界的金手指。**明确要求：主角可以穿越到如《斗破苍穹》、《吞噬星空》、《完美世界》等玄幻或高武世界获取资源与力量**。作为一部全新的小说，请从第1章开始构思写起。
@@ -84,7 +85,7 @@ data:
     fi
 
     # 明确指定的仓库地址（格式: 组织名/仓库名）
-    TARGET_REPO="qpzm7903/novel-lingcage"
+    TARGET_REPO="qpzm7903/novel-1"
 
     # 检查仓库是否存在，不存在则创建
     if ! gh repo view "${TARGET_REPO}" &>/dev/null; then
@@ -110,17 +111,17 @@ data:
     
     echo "=== [Agent 1] 剧情总编剧 (Planner) ==="
     timeout ${ISC_CLAUDE_CODE_TIMEOUT:-"3600"} \
-        claude --dangerously-skip-permissions --print --verbose --output-format stream-json --model "claude-opus-4-7" -p "工作目录为: /workspace/data/。你是【剧情总编剧】Agent。请先调用文件读取工具读取 story_summary.md、world_setting.md 以及最近的几章正文。然后结合 prompt.md 中的总体要求，在 plan.md 中深度推演并写下接下来 10 章的详细大纲（不要去写小说正文！）。" \
+        claude --dangerously-skip-permissions --print --verbose --output-format stream-json --model "glm-5.1" -p "工作目录为: /workspace/data/。你是【剧情总编剧】Agent。请先调用文件读取工具读取 story_summary.md、world_setting.md 以及最近的几章正文。然后结合 prompt.md 中的总体要求，在 plan.md 中深度推演并写下接下来 10 章的详细大纲（不要去写小说正文！）。" \
         2>&1 | tee /workspace/logs/planner_result.txt | _fmt_stream | tee /workspace/logs/planner_pretty.txt || true
 
     echo "=== [Agent 2] 网文主笔 (Writer) ==="
     timeout ${ISC_CLAUDE_CODE_TIMEOUT:-"7200"} \
-        claude --dangerously-skip-permissions --print --verbose --output-format stream-json --model "${ANTHROPIC_MODEL:-deepseek-chat}" -p "工作目录为: /workspace/data/。你是【网文主笔】Agent。请读取 plan.md 中最新的大纲。严格按照大纲，结合 prompt.md 的文风要求，一章一章地编写接下来的 10 章正文并保存到 chapters/ 目录中。你的任务仅限写正文，写完即止。" \
+        claude --dangerously-skip-permissions --print --verbose --output-format stream-json --model "kimi-k2.6" -p "工作目录为: /workspace/data/。你是【网文主笔】Agent。请读取 plan.md 中最新的大纲。严格按照大纲，结合 prompt.md 的文风要求，一章一章地编写接下来的 10 章正文并保存到 chapters/ 目录中。你的任务仅限写正文，写完即止。" \
         2>&1 | tee /workspace/logs/writer_result.txt | _fmt_stream | tee /workspace/logs/writer_pretty.txt || true
 
     echo "=== [Agent 3] 设定管理员 (Lore Master) ==="
     timeout ${ISC_CLAUDE_CODE_TIMEOUT:-"3600"} \
-        claude --dangerously-skip-permissions --print --verbose --output-format stream-json --model "${ANTHROPIC_MODEL:-deepseek-chat}" -p "工作目录为: /workspace/data/。你是【设定管理员】Agent。请阅读刚刚由主笔新写出的正文。将新剧情提炼追加到 story_summary.md 中，并把正文中新出现的人物、功法、地图更新到 world_setting.md 和 characters.md 中。" \
+        claude --dangerously-skip-permissions --print --verbose --output-format stream-json --model "glm-5.1" -p "工作目录为: /workspace/data/。你是【设定管理员】Agent。请阅读刚刚由主笔新写出的正文。将新剧情提炼追加到 story_summary.md 中，并把正文中新出现的人物、功法、地图更新到 world_setting.md 和 characters.md 中。" \
         2>&1 | tee /workspace/logs/loremaster_result.txt | _fmt_stream | tee /workspace/logs/loremaster_pretty.txt || true
 
     # 获取管道中第一个命令 (timeout) 的退出码
