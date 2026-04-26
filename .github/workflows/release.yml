@@ -3,7 +3,7 @@ name: Release
 on:
   push:
     tags:
-      - "v*.*.*"   # 触发条件：推送 v1.0.0 格式的 tag
+      - "v*.*.*"
 
 env:
   REGISTRY: ghcr.io
@@ -13,25 +13,23 @@ jobs:
   release:
     runs-on: ubuntu-latest
     permissions:
-      contents: write       # 创建 GitHub Release
-      packages: write       # 推送到 GHCR
+      contents: write
+      packages: write
       id-token: write
 
     steps:
       - uses: actions/checkout@v4
 
-      # ── 运行测试 ──────────────────────────────────────────────────
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: "pip"
 
-      - name: Install dependencies & run tests
+      - name: Install dependencies & verify structure
         run: |
           pip install -r requirements.txt
           python3 verify_local.py
 
-      # ── 构建并推送 Docker 镜像到 GHCR ────────────────────────────
       - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
@@ -39,39 +37,37 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract Docker metadata
+      - name: Extract Docker metadata (general-claude-pipeline)
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/agent
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/general-claude-pipeline
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=raw,value=latest
 
-      - name: Build and push agent image
+      - name: Build and push general-claude-pipeline image
         uses: docker/build-push-action@v5
         with:
           context: ./agent
+          file: ./agent/Dockerfile.general-agent
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
 
-      # ── 打包源码产物 ──────────────────────────────────────────────
       - name: Package source archive
         run: |
           TAG=${GITHUB_REF_NAME}
           tar --exclude='.git' \
               --exclude='.env' \
-              --exclude='logs' \
               --exclude='__pycache__' \
+              --exclude='job-agent/dist' \
               -czf claude-pipeline-${TAG}-src.tar.gz \
-              agent/ config/ example_repo/ k8s/ \
-              run.sh k8s-run.sh \
+              agent/ config/ k8s/ job-agent/ \
               requirements.txt verify_local.py \
               .env.example README.md CLAUDE.md
 
-      # ── 创建 GitHub Release ───────────────────────────────────────
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -82,18 +78,16 @@ jobs:
             ## Docker Image
 
             ```bash
-            # 拉取 Agent 镜像
-            docker pull ghcr.io/${{ github.repository }}/agent:${{ github.ref_name }}
-
-            # 或使用 latest
-            docker pull ghcr.io/${{ github.repository }}/agent:latest
+            docker pull ghcr.io/${{ github.repository }}/general-claude-pipeline:${{ github.ref_name }}
+            docker pull ghcr.io/${{ github.repository }}/general-claude-pipeline:latest
             ```
 
             ## Quick Start
 
             ```bash
-            cp .env.example .env
-            # 填入 ANTHROPIC_API_KEY 和 GIT_TOKEN
+            # 1. 部署 LiteLLM 网关
+            kubectl apply -f k8s/litellm.yaml
 
-            ./run.sh https://github.com/owner/repo
+            # 2. 组装并部署 job-agent 任务
+            bash job-agent/assemble.sh job-agent/tasks/<task-name>/job.yml --apply
             ```

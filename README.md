@@ -1,264 +1,86 @@
 # Claude Pipeline
 
-AI 驱动的自动化开发流水线。定时扫描仓库，启动独立容器，由 Claude 全权自主完成开发并推送代码。
+> 用一次性 K8s Job 让 Claude / qwen-code agent 持续迭代完成开发任务（补单测、特性开发、重构、性能优化、bug 修复、SDD 流程等）。
 
-```
-[CLAUDE.md 规范 + 仓库代码]
-        ↓ 定时触发（Docker / Kubernetes CronJob）
-[Agent Container]
-  ├── git clone（带重试）
-  └── Claude 自主执行（读取 CLAUDE.md → 实施 → 提交 → 推送 → 创建 PR）
-```
+## 三大中心
 
-## 核心理念
+| 中心 | 目录 | 职责 |
+|------|------|------|
+| 一：Agent 镜像 | `agent/` | Claude CLI 运行环境（general / java / rust 三栈，base + agent 两层） |
+| 二：LiteLLM 网关 | `k8s/litellm.yaml` | 模型协议转换 + 多供应商路由（claude-* → glm/deepseek/kimi） |
+| 三：Job-Agent | `job-agent/` | 一次性任务执行（assemble → kubectl apply → agent 多轮迭代） |
 
-**Claude 全权自主决策**。`entrypoint.sh` 只是一个约 200 行的启动器，不编排任何业务逻辑。所有规范（BMAD 工作流、代码质量、版本发布等）通过目标仓库的 `CLAUDE.md` 传递给 Claude。
-
-这比复杂的 bash 状态机效果更好，因为 AI 的自主决策能力优于预设的固定流程。
+任何改动先确认涉及哪一层；详见 [CLAUDE.md](./CLAUDE.md)。
 
 ## 快速开始
 
-### 1. 配置环境变量
-
 ```bash
-cp .env.example .env
-# 编辑 .env 填入：
-# ANTHROPIC_AUTH_TOKEN   API Key（或 ANTHROPIC_API_KEY）
-# ANTHROPIC_BASE_URL     自定义 API 地址（可选，如 DashScope 代理）
-# ANTHROPIC_MODEL        模型名（可选，如 qwen3.5-plus）
-# GIT_TOKEN              GitHub Personal Access Token
+# 0. 准备：构建镜像 + 部署 LiteLLM
+docker build -t general-claude-base:latest    -f agent/Dockerfile.general-base   ./agent/
+docker build -t general-claude-pipeline:latest -f agent/Dockerfile.general-agent ./agent/
+cp k8s/secret.yaml.example k8s/secret.yaml   # 填入各供应商 API key
+kubectl apply -f k8s/secret.yaml -f k8s/litellm.yaml
+bash k8s/setup-litellm.sh                    # 等待就绪
+
+# 1. 维护中心配置（镜像、LiteLLM endpoint、namespace 默认值）
+$EDITOR config/centers.yaml
+
+# 2. 编写任务（参考 job-agent/tasks/xdm-ut）
+mkdir -p job-agent/tasks/my-task
+cat > job-agent/tasks/my-task/prompt.md <<'EOF'
+# 任务说明（自包含或在 job.yml 中用 prompts/base-*.md+ 拼接）
+...
+EOF
+cat > job-agent/tasks/my-task/job.yml <<'EOF'
+# assemble: prompt.md=prompts/base-system.md+tasks/my-task/prompt.md
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: my-task
+spec:
+  completions: 5
+  parallelism: 1
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: agent
+          image: general:__from_centers__   # 由 centers.yaml 回填
+          command: ["/bin/bash"]
+          args: ["-c", "bash /pipeline/run.sh"]
+          env:
+            - name: REPO_URL
+              value: "https://x-access-token:TOKEN@github.com/owner/repo.git"
+          volumeMounts:
+            - name: pipeline-config
+              subPath: run.sh
+              mountPath: /pipeline/run.sh
+            - name: pipeline-config
+              subPath: prompt.md
+              mountPath: /pipeline/prompt.md
+      volumes:
+        - name: pipeline-config
+          configMap:
+            name: my-task-config
+            defaultMode: 0755
+EOF
+
+# 3. 组装并部署
+bash job-agent/assemble.sh job-agent/tasks/my-task/job.yml --apply
+kubectl -n claude-pipeline logs -f -l job-name=my-task
 ```
 
-### 2. 在目标仓库中创建 CLAUDE.md
-
-将 `example_repo/CLAUDE.md` 复制到目标仓库根目录，按需修改：
-
-```bash
-cp example_repo/CLAUDE.md /path/to/your/repo/CLAUDE.md
-```
-
-### 3. 配置仓库列表
-
-编辑 `config/repos.yaml`，添加要监控的仓库：
-
-```yaml
-repos:
-  - name: "my-project"
-    url: "https://github.com/owner/repo"
-    enabled: true
-```
-
-### 4. 构建 Agent 镜像
-
-镜像分两层，基础镜像（Rust、Node.js、claude CLI）很少变化，日常迭代只需重建 Agent 层：
-
-```bash
-# 首次或 claude CLI 版本升级时才需要重建 base
-docker build -t claude-pipeline-base:latest -f agent/Dockerfile.rust-base ./agent/
-
-# 日常代码变更只需重建 agent 层（秒级完成）
-docker build -t claude-pipeline-agent:latest -f agent/Dockerfile.rust-agent ./agent/
-```
-
-### 5. 运行
-
-#### Docker 模式（单次执行）
-
-你可以通过提供环境变量和执行 `./run.sh` 来启动单次运行任务。`./run.sh` 脚本实质上是对 `docker run` 的极简封装。
-
-**可用环境变量配置说明：**
-
-- **API 凭证（必填）**: `ANTHROPIC_API_KEY` 或 `ANTHROPIC_AUTH_TOKEN`。
-- **Git 凭证（必填）**: `GIT_TOKEN`、`GITHUB_TOKEN` 或 `GH_TOKEN`，用于克隆与推送代码。
-- **自定义模型（可选）**: `ANTHROPIC_MODEL` 或 `CLAUDE_MODEL`（默认如：`claude-opus-4-5-20251001`）。
-- **代理地址（可选）**: `ANTHROPIC_BASE_URL`，用于兼容第三方中转 API。
-- **自定义镜像（可选）**: `DOCKER_IMAGE`，覆盖默认的 `claude-pipeline-agent:latest`，例如使用测试版本的镜像。
-
-环境变量可以通过根目录下的 `.env` 文件统一配置，也可以在命令行执行时临时注入。
-
-**使用示例：**
-
-```bash
-# --------------------------------------------------
-# 方式一：默认执行（自动读取 .env 中环境变量）
-# --------------------------------------------------
-# 单个仓库
-./run.sh https://github.com/owner/repo
-
-# 批量执行 config/repos.yaml 中所有 enabled 仓库
-./run.sh
-
-# --------------------------------------------------
-# 方式二：命令行指定临时配置
-# --------------------------------------------------
-# 使用代理（例如 DashScope 阿里云通义千问模型）
-ANTHROPIC_BASE_URL=https://dashscope.aliyuncs.com/apps/anthropic \
-ANTHROPIC_MODEL=qwen3.5-plus \
-./run.sh https://github.com/owner/repo
-
-# 指定不同的运行时镜像
-DOCKER_IMAGE=claude-pipeline-agent:test ./run.sh https://github.com/owner/repo
-```
-
-如果你希望彻底脱离脚本并完全手动控制 Docker，可以直接使用等价的 `docker run` 原生命令配置所有参数：
-
-```bash
-docker run -d -m 4g --cpus 1 \
-  --label claude-pipeline=true \
-  -v cargo-registry-cache:/home/pipeline/.cargo/registry \
-  -e REPO_URL="https://github.com/owner/repo" \
-  -e ANTHROPIC_API_KEY="your-api-key" \
-  -e ANTHROPIC_MODEL="qwen3.5-plus" \
-  -e ANTHROPIC_BASE_URL="https://dashscope.aliyuncs.com/apps/anthropic" \
-  -e GIT_TOKEN="your-github-token" \
-  -e GIT_AUTHOR_NAME="Claude Pipeline Bot" \
-  -e GIT_AUTHOR_EMAIL="pipeline@claude.ai" \
-  claude-pipeline-agent:latest
-```
-
-#### Kubernetes 模式（定时自动触发）
-
-**方式一：使用 Secret（推荐生产环境）**
-
-```bash
-# 1. 创建 Secret
-./k8s-run.sh --update-secret
-
-# 2. 部署 CronJob
-./k8s-run.sh                                     # 所有 enabled 仓库
-./k8s-run.sh https://github.com/owner/repo       # 单个仓库
-```
-
-**方式二：env 文件直接注入（无需 Secret，适合多模型/多账号场景）**
-
-```bash
-# 用 .env.xxx 文件中的所有变量直接写入 pod，不经过 K8s Secret
-./k8s-run.sh --env .env.m2.5 --name my-m2-5
-
-# 指定 repo URL（env 文件中有 GIT_REPO_URL 时可省略）
-./k8s-run.sh --env .env.m2.5 --name my-m2-5 https://github.com/owner/repo
-
-# CronJob 已存在时自动更新，不存在时自动创建（kubectl apply 幂等）
-```
-
-env 文件格式（支持所有 `ANTHROPIC_*`、`GIT_*` 变量，别名自动补全）：
-
-```bash
-ANTHROPIC_AUTH_TOKEN=sk-xxx
-ANTHROPIC_BASE_URL=http://your-proxy
-ANTHROPIC_MODEL=MiniMax-M2.5
-ANTHROPIC_SMALL_FAST_MODEL=MiniMax-M2.5
-ANTHROPIC_DEFAULT_OPUS_MODEL=MiniMax-M2.5
-ANTHROPIC_DEFAULT_SONNET_MODEL=MiniMax-M2.5
-ANTHROPIC_DEFAULT_HAIKU_MODEL=MiniMax-M2.5
-GIT_TOKEN=ghp_xxx
-GIT_REPO_URL=https://github.com/owner/repo   # 可选，省略则用命令行参数
-```
-
-**常用操作**
-
-```bash
-./k8s-run.sh --status                            # 查看所有 CronJob / Job / Pod 状态
-./k8s-run.sh --logs                              # 查看最近 Pod 日志
-./k8s-run.sh --logs -f                           # 实时跟踪
-./k8s-run.sh --delete                            # 删除所有 CronJob
-```
-
-**使用 anyrouter + repo-prompt-driven 创建 CronJob（常用）**
-
-适用于目标仓库有 `prompt.md` 文件、采用自驱迭代模式（而非 BMAD）的场景：
-
-```bash
-# anyrouter.env 中需包含：
-#   ANTHROPIC_AUTH_TOKEN=sk-xxx
-#   ANTHROPIC_BASE_URL=https://anyrouter.top
-#   ANTHROPIC_MODEL=claude-sonnet-4-6-20250514
-#   GIT_TOKEN=ghp_xxx
-#   GIT_REPO_URL=https://github.com/owner/repo   （目标仓库 URL）
-
-CLAUDE_PROMPT_FILE=/agent/repo-prompt-driven.txt \
-  ./k8s-run.sh --env anyrouter.env --name <name>
-```
-
-- `--env anyrouter.env` — 所有 API Key / Git Token 从 env 文件读取，直接写入 pod（无需 K8s Secret）
-- `--name <name>` — CronJob 名称，建议用仓库名缩写（如 `tetris`, `dailylogger`）
-- `CLAUDE_PROMPT_FILE=/agent/repo-prompt-driven.txt` — 使用镜像内置的自驱 prompt，Claude 会先读目标仓库的 `prompt.md`，再自主决策规划 / 开发 / 发布
-
-完整示例：
-
-```bash
-CLAUDE_PROMPT_FILE=/agent/repo-prompt-driven.txt \
-  ./k8s-run.sh --env anyrouter.env --name tetris
-```
-
-等价的 Docker 单次执行（不用 K8s）：
-
-```bash
-source anyrouter.env
-CLAUDE_PROMPT_FILE=/agent/repo-prompt-driven.txt \
-  ./run.sh "${GIT_REPO_URL}"
-```
-
-
-## 环境变量参考
-
-| 变量 | 必填 | 说明 |
-|------|------|------|
-| `ANTHROPIC_AUTH_TOKEN` | ✅ | API Key（也支持 `ANTHROPIC_API_KEY`） |
-| `ANTHROPIC_BASE_URL` | 可选 | 自定义 API 地址，如 DashScope 代理 |
-| `ANTHROPIC_MODEL` | 可选 | 模型名，如 `qwen3.5-plus` |
-| `GIT_TOKEN` | ✅ | GitHub PAT（需要 `repo` + `pull_requests` 权限） |
-
-## 项目结构
-
-```
-├── agent/
-│   ├── Dockerfile.rust-base      # 基础镜像（Rust、Node.js、claude CLI）
-│   ├── Dockerfile.rust-agent     # Agent 镜像（基于 base，追加 entrypoint）
-│   ├── Dockerfile.general-base   # 基础镜像（精简版）
-│   ├── Dockerfile.general-agent  # Agent 镜像（精简版）
-│   ├── entrypoint.sh         # 克隆 → Claude 自主执行（含提交、推送和 PR）
-
-├── example_repo/
-│   └── CLAUDE.md             # 目标仓库 CLAUDE.md 模板（复制到你的仓库使用）
-├── k8s/
-│   ├── namespace.yaml        # K8s namespace
-│   ├── rbac.yaml             # ServiceAccount
-│   ├── cronjob-template.yaml # CronJob 模板
-│   ├── secret.yaml.example   # Secret 示例
-│   └── render_and_apply.py   # 模板渲染 + kubectl apply
-├── config/
-│   ├── config.yaml           # 全局配置（docker、anthropic、git、kubernetes）
-│   └── repos.yaml            # 仓库列表
-├── run.sh                    # Docker 模式入口
-├── k8s-run.sh                # Kubernetes 模式入口
-└── verify_local.py           # 本地验证脚本
-```
-
-## 并发安全
-
-多个容器可同时运行，通过 **Git 原子 push** 实现分布式锁：
-
-- 只有 fast-forward push 成功的容器才能推送
-- 其他容器收到拒绝后自动跳过
-
-Kubernetes 模式默认 `concurrencyPolicy: Forbid`，上一个 Job 未结束时跳过本次触发。
-
-## 使用代理（DashScope 示例）
-
-```bash
-ANTHROPIC_BASE_URL=https://dashscope.aliyuncs.com/apps/anthropic
-ANTHROPIC_AUTH_TOKEN=your-dashscope-key
-ANTHROPIC_MODEL=qwen3.5-plus
-```
-
-## 本地验证
+## 验证
 
 ```bash
 pip install -r requirements.txt
-python3 verify_local.py           # 完整验证（语法 + 结构 + K8s 清单）
+python3 verify_local.py
 ```
 
-## License
+## 文档
 
-MIT
+- [CLAUDE.md](./CLAUDE.md)：架构与开发规范（必读）
+- [docs/litellm-deployment.md](./docs/litellm-deployment.md)：LiteLLM 部署细节
+- [docs/rancher-installation.md](./docs/rancher-installation.md) / [docs/rancher-dashboard.md](./docs/rancher-dashboard.md)：Rancher K8s 环境
+- [job-agent/ROADMAP.md](./job-agent/ROADMAP.md)：后续优化方向

@@ -1,0 +1,77 @@
+# oauth2-perf — 在 job-demo 上做可测量的性能优化
+#
+# 组装:  bash job-agent/assemble.sh job-agent/tasks/oauth2-perf/job.yml
+# 部署:  kubectl apply -f job-agent/dist/oauth2-perf.yml
+# 日志:  kubectl -n claude-pipeline logs -f -l job-name=oauth2-perf
+# 删除:  kubectl delete -f job-agent/dist/oauth2-perf.yml
+
+# assemble: prompt.md=prompts/base-system.md+prompts/base-observability.md+prompts/task-perf-optimize.md+tasks/oauth2-perf/prompt.md
+
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: oauth2-perf
+  namespace: claude-pipeline
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: agent
+          image: java-claude-pipeline:latest
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/bash"]
+          args: ["-c", "bash /pipeline/run.sh"]
+          env:
+            - name: REPO_URL
+              value: "https://github.com/qpzm7903/job-demo"
+            - name: GIT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: github-token
+                  key: GIT_TOKEN
+            - name: GIT_AUTHOR_NAME
+              value: "qpzm7903"
+            - name: GIT_AUTHOR_EMAIL
+              value: "noreply@qpzm7903.local"
+            - name: EXEC_MODE
+              value: "iterate"
+            - name: ROUND_TIMEOUT
+              value: "600"
+            - name: MAX_ITERATIONS
+              value: "3"
+            - name: MAX_NOCHANGE
+              value: "1"
+            - name: ITER_COOLDOWN
+              value: "10"
+            - name: WORKSPACE
+              value: "/workspace/data"
+            - name: LOGS_DIR
+              value: "/workspace/logs"
+            - name: PROMPT_FILE
+              value: "/pipeline/prompt.md"
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "2Gi"
+            limits:
+              cpu: "4000m"
+              memory: "8Gi"
+          volumeMounts:
+            - name: pipeline-config
+              subPath: run.sh
+              mountPath: /pipeline/run.sh
+            - name: pipeline-config
+              subPath: prompt.md
+              mountPath: /pipeline/prompt.md
+      volumes:
+        - name: pipeline-config
+          configMap:
+            name: oauth2-perf-config
+            defaultMode: 0755

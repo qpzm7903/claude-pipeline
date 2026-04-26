@@ -1,7 +1,8 @@
 # java-claude-pipeline
 #
-# 基于 java-claude-base（+ JDK 17 + Maven 3.9.x），
-# 追加 entrypoint 脚本与 lib，适用于 Java 工程类任务（Maven + Spring Boot）。
+# 基于 java-claude-base（+ JDK 17 + Maven 3.9.x）的运行时镜像。
+# 镜像本身不含业务逻辑，run.sh 与 prompt.md 由 job-agent/assemble.sh
+# 通过 ConfigMap 注入到容器，启动命令由 K8s Job spec 显式指定。
 #
 # 构建：
 #   docker build -t java-claude-pipeline:latest -f agent/Dockerfile.java-agent ./agent/
@@ -9,16 +10,9 @@
 FROM java-claude-base:latest
 
 USER root
-COPY --chown=pipeline:pipeline entrypoint.sh /agent/entrypoint.sh
-COPY --chown=pipeline:pipeline default-prompt.txt /agent/default-prompt.txt
-COPY --chown=pipeline:pipeline repo-prompt-driven.txt /agent/repo-prompt-driven.txt
-COPY --chown=pipeline:pipeline auto-iterate-prompt.txt /agent/auto-iterate-prompt.txt
-COPY --chown=pipeline:pipeline lib/ /agent/lib/
-RUN chmod +x /agent/entrypoint.sh /agent/lib/*.sh
+COPY --chown=pipeline:pipeline lib/fmt_stream.py /agent/lib/fmt_stream.py
 
 RUN mkdir -p /home/pipeline/.claude && chown pipeline:pipeline /home/pipeline/.claude
 
 USER pipeline
 WORKDIR /workspace
-
-ENTRYPOINT ["/agent/entrypoint.sh"]

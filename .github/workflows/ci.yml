@@ -20,14 +20,23 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Run local verification tests
+      - name: Run structure verification
         run: python3 verify_local.py
 
-  lint-dockerfile:
+  lint-dockerfiles:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        dockerfile:
+          - agent/Dockerfile.general-base
+          - agent/Dockerfile.general-agent
+          - agent/Dockerfile.java-base
+          - agent/Dockerfile.java-agent
+          - agent/Dockerfile.rust-base
+          - agent/Dockerfile.rust-agent
     steps:
       - uses: actions/checkout@v4
       - uses: hadolint/hadolint-action@v3.1.0
         with:
-          dockerfile: agent/Dockerfile
+          dockerfile: ${{ matrix.dockerfile }}
           failure-threshold: error

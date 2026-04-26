@@ -1,327 +1,131 @@
 """
-verify_local.py - 本地验证脚本（不需要 Docker）
+verify_local.py — 本地结构验证（不需要 Docker / K8s）
+
+校验项：
+  - 三大中心目录布局完整
+  - centers.yaml 关键字段
+  - assemble.sh 与 components/run.sh 关键逻辑
+  - 现有 tasks/<name>/ 自包含
 
 用法:
-  python verify_local.py                    # 完整验证
-  python verify_local.py --test-prompt      # 测试 entrypoint 工作流完整性
-  python verify_local.py --test-config      # 验证 config.yaml 结构
+  python3 verify_local.py            # 全部
+  python3 verify_local.py --centers  # 仅 centers.yaml
+  python3 verify_local.py --assemble # 仅 assemble.sh + run.sh
+  python3 verify_local.py --tasks    # 仅 tasks/
 """
 
 import argparse
 import sys
 from pathlib import Path
 
+ROOT = Path(__file__).parent
 
-def test_entrypoint_prompt():
-    """验证 agent/ 目录的整体工作流完整性（entrypoint + lib 模块 + prompt 文件）。"""
-    print("\n" + "="*50)
-    print("测试 1: Agent 工作流完整性")
-    print("="*50)
 
-    agent_dir = Path(__file__).parent / "agent"
-    entrypoint = agent_dir / "entrypoint.sh"
-    if not entrypoint.exists():
-        print(f"❌ 文件不存在: {entrypoint}")
-        return False
+def _check(label, ok):
+    print(f"  {'✅' if ok else '❌'} {label}")
+    return ok
 
-    # 收集 entrypoint.sh + lib/ 下所有源文件的内容
-    agent_content = entrypoint.read_text()
-    lib_dir = agent_dir / "lib"
-    if lib_dir.is_dir():
-        for f in lib_dir.iterdir():
-            if f.suffix in (".sh", ".py"):
-                agent_content += "\n" + f.read_text()
 
-    # 包含 prompt 文件（.txt）
-    for f in agent_dir.iterdir():
-        if f.suffix == ".txt":
-            agent_content += "\n" + f.read_text()
-
-    # 检查 agent 源码中的关键字（entrypoint + lib 模块）
-    source_checks = [
-        ("步骤 0: 环境检查",         "环境检查步骤"),
-        ("步骤 1: 克隆仓库",         "克隆仓库步骤"),
-        ("步骤 2: Claude 自主执行",   "Claude 执行步骤"),
-        ("git clone",               "克隆命令"),
-        ("claude",                  "Claude CLI 调用"),
-        ("stream-json",             "stream-json 输出格式"),
-        ("_fmt_stream",             "格式化函数"),
-        ("ANTHROPIC_API_KEY",       "API key 检查"),
-        ("REPO_URL",                "仓库 URL 变量"),
-        ("CLAUDE.md",               "CLAUDE.md 引用"),
+def test_layout():
+    print("\n=== 三大中心目录布局 ===")
+    expected = [
+        "agent/Dockerfile.general-base",
+        "agent/Dockerfile.general-agent",
+        "agent/lib/fmt_stream.py",
+        "k8s/litellm.yaml",
+        "k8s/setup-litellm.sh",
+        "job-agent/assemble.sh",
+        "job-agent/components/run.sh",
+        "job-agent/components/settings.json",
+        "config/centers.yaml",
     ]
-
-    all_ok = True
-    for keyword, description in source_checks:
-        if keyword in agent_content:
-            print(f"  ✅ {description}")
-        else:
-            print(f"  ❌ 缺少: {description} (关键字: {keyword!r})")
-            all_ok = False
-
-    # 检查 prompt 文件存在性与基本结构
-    prompt_files = {
-        "default-prompt.txt": ["BMAD", "bmad-", "单步执行"],
-        "auto-iterate-prompt.txt": ["优先级", "git push", "P4"],
-    }
-    for fname, keywords in prompt_files.items():
-        fpath = agent_dir / fname
-        if not fpath.exists():
-            print(f"  ❌ Prompt 文件缺失: {fname}")
-            all_ok = False
-            continue
-        print(f"  ✅ Prompt 文件存在: {fname}")
-        pcontent = fpath.read_text()
-        for kw in keywords:
-            if kw not in pcontent:
-                print(f"    ❌ {fname} 缺少关键字: {kw!r}")
-                all_ok = False
-
-    if all_ok:
-        print("✅ Agent 工作流验证通过！")
-    return all_ok
+    return all(_check(p, (ROOT / p).exists()) for p in expected)
 
 
-def test_config():
-    """验证 config.yaml 不含已删除的 pipeline/agent 段。"""
-    print("\n" + "="*50)
-    print("测试 2: config.yaml 结构验证")
-    print("="*50)
-
+def test_centers():
+    print("\n=== config/centers.yaml ===")
+    path = ROOT / "config" / "centers.yaml"
+    if not _check("centers.yaml 存在", path.exists()):
+        return False
     try:
         import yaml
     except ImportError:
-        print("  ⚠️  PyYAML 未安装，跳过 yaml 解析（仍做文本检查）")
-        yaml = None
-
-    cfg_path = Path(__file__).parent / "config" / "config.yaml"
-    if not cfg_path.exists():
-        print(f"❌ 文件不存在: {cfg_path}")
-        return False
-
-    content = cfg_path.read_text()
-
-    # 确认已删除的段不存在
-    removed_keys = ["poll_interval_seconds", "max_concurrent_containers", "tdd_timeout"]
-    for key in removed_keys:
-        if key in content:
-            print(f"  ❌ 已废弃的配置仍存在: {key!r}")
-            return False
-
-    # 确认必要段存在
-    required_keys = ["docker:", "anthropic:", "git:"]
-    for key in required_keys:
-        if key in content:
-            print(f"  ✅ {key}")
-        else:
-            print(f"  ❌ 缺少必要配置: {key!r}")
-            return False
-
-    if yaml:
-        cfg = yaml.safe_load(content)
-        assert "docker" in cfg, "docker 段缺失"
-        assert "anthropic" in cfg, "anthropic 段缺失"
-        assert "git" in cfg, "git 段缺失"
-        assert "pipeline" not in cfg, "pipeline 段应已删除"
-        assert "agent" not in cfg, "agent 段应已删除"
-
-    print("✅ config.yaml 验证通过！")
-    return True
-
-
-def test_run_sh():
-    """验证 run.sh 存在且包含必要逻辑。"""
-    print("\n" + "="*50)
-    print("测试 3: run.sh 完整性")
-    print("="*50)
-
-    run_sh = Path(__file__).parent / "run.sh"
-    if not run_sh.exists():
-        print(f"❌ 文件不存在: {run_sh}")
-        return False
-
-    content = run_sh.read_text()
-    checks = [
-        ("docker run",          "启动容器"),
-        ("ANTHROPIC_API_KEY",   "API key 传递"),
-        ("ANTHROPIC_AUTH_TOKEN","AUTH_TOKEN 兼容"),
-        ("ANTHROPIC_MODEL",     "模型参数"),
-        ("GIT_TOKEN",           "Git token"),
-        ("ANTHROPIC_BASE_URL",  "Base URL 条件传递"),
-        ("repos.yaml",          "批量模式读取 repos"),
-    ]
-
-    all_ok = True
-    for keyword, description in checks:
-        if keyword in content:
-            print(f"  ✅ {description}")
-        else:
-            print(f"  ❌ 缺少: {description} (关键字: {keyword!r})")
-            all_ok = False
-
-    if all_ok:
-        print("✅ run.sh 验证通过！")
-    return all_ok
-
-
-def test_k8s_manifests():
-    """验证 K8s 相关文件存在且包含必要内容。"""
-    print("\n" + "="*50)
-    print("测试 4: Kubernetes 清单文件验证")
-    print("="*50)
-
-    base = Path(__file__).parent
-    k8s_dir = base / "k8s"
-
-    if not k8s_dir.exists():
-        print("  ⏭️  k8s/ 目录不存在，跳过（Docker 模式不需要 K8s 文件）")
+        print("  ⚠️  PyYAML 未安装，跳过解析校验")
         return True
-
-    # 检查必要文件存在
-    required_files = [
-        "namespace.yaml",
-        "rbac.yaml",
-        "cronjob-template.yaml",
-        "secret.yaml.example",
-        "render_and_apply.py",
-    ]
-    all_ok = True
-    for fname in required_files:
-        fpath = k8s_dir / fname
-        if fpath.exists():
-            print(f"  ✅ k8s/{fname}")
-        else:
-            print(f"  ❌ 缺少: k8s/{fname}")
-            all_ok = False
-
-    k8s_run = base / "k8s-run.sh"
-    if k8s_run.exists():
-        print(f"  ✅ k8s-run.sh")
-    else:
-        print(f"  ❌ 缺少: k8s-run.sh")
-        all_ok = False
-
-    # 检查模板占位符
-    template_path = k8s_dir / "cronjob-template.yaml"
-    if template_path.exists():
-        template = template_path.read_text()
-        placeholders = [
-            "{REPO_SLUG}", "{REPO_URL}", "{SCHEDULE}", "{IMAGE}",
-            "{IMAGE_PULL_POLICY}", "{MODEL}", "{ANTHROPIC_BASE_URL}",
-            "{GIT_AUTHOR_NAME}", "{GIT_AUTHOR_EMAIL}",
-        ]
-        for ph in placeholders:
-            if ph in template:
-                print(f"  ✅ 模板包含占位符 {ph}")
-            else:
-                print(f"  ❌ 模板缺少占位符 {ph}")
-                all_ok = False
-
-        # 检查关键字段
-        key_fields = [
-            ("concurrencyPolicy: Forbid", "并发策略（单容器串行）"),
-            ("backoffLimit: 0",          "失败不重试"),
-            ("restartPolicy: Never",     "不重启"),
-            ("activeDeadlineSeconds",    "超时设置"),
-            ("ANTHROPIC_AUTH_TOKEN",     "AUTH_TOKEN 兼容"),
-        ]
-        for keyword, desc in key_fields:
-            if keyword in template:
-                print(f"  ✅ 模板包含 {desc} ({keyword!r})")
-            else:
-                print(f"  ❌ 模板缺少 {desc} ({keyword!r})")
-                all_ok = False
-
-    # 检查 config.yaml 含 kubernetes: 段
-    cfg_path = base / "config" / "config.yaml"
-    if cfg_path.exists() and "kubernetes:" in cfg_path.read_text():
-        print("  ✅ config.yaml 包含 kubernetes: 段")
-    else:
-        print("  ❌ config.yaml 缺少 kubernetes: 段")
-        all_ok = False
-
-    # 安全检查：k8s/secret.yaml 不应被 git 追踪
-    secret_yaml = k8s_dir / "secret.yaml"
-    if secret_yaml.exists():
-        import subprocess
-        result = subprocess.run(
-            ["git", "ls-files", "--error-unmatch", str(secret_yaml)],
-            capture_output=True,
-            cwd=base,
-        )
-        if result.returncode == 0:
-            print("  ❌ 安全警告: k8s/secret.yaml 被 git 追踪！请加入 .gitignore")
-            all_ok = False
-        else:
-            print("  ✅ k8s/secret.yaml 未被 git 追踪（安全）")
-    else:
-        print("  ℹ️  k8s/secret.yaml 不存在（正常，由用户自行创建）")
-
-    if all_ok:
-        print("✅ K8s 清单文件验证通过！")
-    return all_ok
+    cfg = yaml.safe_load(path.read_text()) or {}
+    ok = True
+    for section in ("image", "litellm", "kubernetes"):
+        ok &= _check(f"{section}: 段存在", section in cfg)
+    if "image" in cfg:
+        for stack in ("general", "java", "rust"):
+            ok &= _check(
+                f"image.{stack} 已定义",
+                stack in cfg["image"],
+            )
+    if "litellm" in cfg:
+        for key in ("base_url", "secret_name", "secret_key"):
+            ok &= _check(
+                f"litellm.{key} 已定义",
+                key in cfg["litellm"],
+            )
+    return ok
 
 
-def test_example_claude_md():
-    """验证 example_repo/CLAUDE.md 存在且包含必要内容。"""
-    print("\n" + "="*50)
-    print("测试 5: example_repo/CLAUDE.md 模板验证")
-    print("="*50)
+def test_assemble():
+    print("\n=== job-agent/assemble.sh + components/run.sh ===")
+    assemble = (ROOT / "job-agent" / "assemble.sh").read_text()
+    run_sh = (ROOT / "job-agent" / "components" / "run.sh").read_text()
+    ok = True
+    for kw in ("# assemble:", "ConfigMap", "Job", "skills", "settings.json"):
+        ok &= _check(f"assemble.sh 包含 {kw!r}", kw in assemble)
+    for kw in ("REPO_URL", "ANTHROPIC_API_KEY", "git clone", "claude", "stream-json"):
+        ok &= _check(f"components/run.sh 包含 {kw!r}", kw in run_sh)
+    return ok
 
-    example_md = Path(__file__).parent / "example_repo" / "CLAUDE.md"
-    if not example_md.exists():
-        print(f"❌ 文件不存在: {example_md}")
-        return False
 
-    content = example_md.read_text()
-    checks = [
-        ("简体中文",        "中文支持要求"),
-        ("prompt.md",      "prompt.md 保护"),
-        ("BMAD",           "BMAD 工作流"),
-        ("代码质量",        "代码质量要求"),
-        ("GitHub Actions", "CI/CD 要求"),
-        ("checksums",      "校验和要求"),
-        ("issue",          "issue 处理"),
-    ]
-
-    all_ok = True
-    for keyword, description in checks:
-        if keyword in content:
-            print(f"  ✅ {description}")
-        else:
-            print(f"  ❌ 缺少: {description} (关键字: {keyword!r})")
-            all_ok = False
-
-    if all_ok:
-        print("✅ example_repo/CLAUDE.md 验证通过！")
-    return all_ok
+def test_tasks():
+    print("\n=== tasks/<name>/ 自包含校验 ===")
+    tasks_dir = ROOT / "job-agent" / "tasks"
+    if not tasks_dir.exists():
+        return _check("tasks/ 存在", False)
+    ok = True
+    for sub in sorted(p for p in tasks_dir.iterdir() if p.is_dir()):
+        job_yml = sub / "job.yml"
+        prompt_md = sub / "prompt.md"
+        ok &= _check(f"{sub.name}/job.yml", job_yml.exists())
+        ok &= _check(f"{sub.name}/prompt.md", prompt_md.exists())
+        if job_yml.exists():
+            head = job_yml.read_text(errors="ignore")[:2000]
+            ok &= _check(
+                f"{sub.name}/job.yml 含 # assemble: 元数据",
+                "# assemble:" in head,
+            )
+    return ok
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Claude Pipeline 本地验证")
-    parser.add_argument("--test-prompt", action="store_true", help="测试 entrypoint 工作流完整性")
-    parser.add_argument("--test-config", action="store_true", help="验证 config.yaml 结构")
-    parser.add_argument("--test-k8s", action="store_true", help="验证 K8s 清单文件")
+    parser = argparse.ArgumentParser(description="Claude Pipeline 结构验证")
+    parser.add_argument("--centers", action="store_true")
+    parser.add_argument("--assemble", action="store_true")
+    parser.add_argument("--tasks", action="store_true")
     args = parser.parse_args()
 
     results = []
-
-    if args.test_prompt:
-        results.append(test_entrypoint_prompt())
-    elif args.test_config:
-        results.append(test_config())
-    elif args.test_k8s:
-        results.append(test_k8s_manifests())
+    if args.centers:
+        results.append(test_centers())
+    elif args.assemble:
+        results.append(test_assemble())
+    elif args.tasks:
+        results.append(test_tasks())
     else:
-        results.append(test_entrypoint_prompt())
-        results.append(test_config())
-        results.append(test_run_sh())
-        results.append(test_k8s_manifests())
-        results.append(test_example_claude_md())
+        results.append(test_layout())
+        results.append(test_centers())
+        results.append(test_assemble())
+        results.append(test_tasks())
 
-    print("\n" + "="*50)
     passed = sum(results)
     total = len(results)
+    print()
     if passed == total:
         print(f"✅ 全部通过: {passed}/{total}")
     else:

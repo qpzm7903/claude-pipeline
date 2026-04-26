@@ -2,38 +2,46 @@
 
 ## Project Structure & Module Organization
 
-- `agent/` contains the runtime image assets: `entrypoint.sh`, prompt templates, Dockerfiles, and reusable helpers in `agent/lib/`.
-- `config/` stores local defaults in `config.yaml` and monitored repositories in `repos.yaml`.
-- `k8s/` holds CronJob templates, RBAC/namespace manifests, secret examples, and `render_and_apply.py`.
-- `docs/` contains deployment guides and ADRs. `example_repo/` shows the expected shape of a target repository (`CLAUDE.md`, `plan.md`, `specs/`).
-- Treat `.env*`, `logs/`, `pipeline.db`, and `k8s/secret.yaml` as local runtime artifacts, not source files.
+This repository has three decoupled centers. `agent/` contains Docker images for CLI agent runtimes and must not include task business logic. `k8s/` contains Kubernetes resources, including LiteLLM deployment, setup scripts, RBAC, namespaces, and smoke tests. `job-agent/` contains one-shot task execution: reusable `components/`, prompt fragments in `prompts/`, task definitions in `tasks/<task-name>/`, and generated YAML in `dist/`. Shared defaults live in `config/centers.yaml`. Documentation is in `docs/`; local structural checks are implemented in `verify_local.py`.
 
 ## Build, Test, and Development Commands
 
-- `pip install -r requirements.txt` installs the Python helpers used by local verification and K8s rendering.
-- `python3 verify_local.py` runs the full structural validation suite.
-- `python3 verify_local.py --test-prompt` or `--test-config` narrows checks while iterating on one area.
-- `./run.sh https://github.com/owner/repo` launches a single Docker-backed pipeline run. `./run.sh` without arguments reads enabled entries from `config/repos.yaml`.
-- `./k8s-run.sh --status` inspects CronJobs, Jobs, and Pods. `./k8s-run.sh --update-secret` refreshes cluster secrets from local env values.
-- `./build-images.sh rust latest` rebuilds the Rust-based images. Use `general` or `all` for other image sets.
+Install Python dependencies before validation:
+
+```bash
+pip install -r requirements.txt
+python3 verify_local.py
+```
+
+Use scoped checks while iterating:
+
+```bash
+python3 verify_local.py --centers
+python3 verify_local.py --assemble
+python3 verify_local.py --tasks
+```
+
+Assemble and optionally deploy a task:
+
+```bash
+bash job-agent/assemble.sh job-agent/tasks/<name>/job.yml
+bash job-agent/assemble.sh job-agent/tasks/<name>/job.yml --apply
+```
+
+Build image layers from `agent/` with explicit Dockerfiles, for example `docker build -t general-claude-pipeline:latest -f agent/Dockerfile.general-agent ./agent/`. Lint Dockerfiles with hadolint before PRs.
 
 ## Coding Style & Naming Conventions
 
-- Follow the existing Bash-first style: `#!/usr/bin/env bash`, `set -euo pipefail`, small functions, and uppercase env vars.
-- Use 4-space indentation in Python and YAML. Prefer `pathlib`, straightforward CLI parsing, and `snake_case` function names.
-- Keep filenames descriptive and consistent with the current patterns, for example `Dockerfile.rust-agent`, `setup-pipeline.sh`, and ADR files like `0001-fmt-stream-decoupling.md`.
-- Preserve the architecture boundary: keep `agent/entrypoint.sh` thin. Policy and workflow behavior belong in prompt files or the target repo’s `CLAUDE.md`.
+Keep the three centers separated: image changes in `agent/`, gateway/K8s changes in `k8s/`, and task orchestration in `job-agent/`. Prefer YAML with two-space indentation. Name tasks with lowercase kebab-case under `job-agent/tasks/<task-name>/`, with `job.yml` and `prompt.md`. Use `# assemble:` comments in task YAML for injected files, and keep cross-task defaults in `config/centers.yaml` instead of duplicating them.
 
 ## Testing Guidelines
 
-- There is no separate unit-test directory yet; the required baseline is `python3 verify_local.py`.
-- After shell changes, run `bash -n run.sh agent/entrypoint.sh k8s-run.sh`.
-- After Dockerfile edits, run `docker run --rm -i hadolint/hadolint < agent/Dockerfile.rust-agent`.
-- For `k8s/` changes, validate against a configured cluster when possible, at minimum with `./k8s-run.sh --status`.
+`verify_local.py` is the primary test suite and CI gate. Run the full check before pushing, and update it when changing `assemble.sh`, `components/run.sh`, task layout rules, or `centers.yaml` semantics. CI also runs hadolint across all Dockerfiles in `agent/`.
 
 ## Commit & Pull Request Guidelines
 
-- Match the repo’s Conventional Commit style: `feat(agent): ...`, `refactor: ...`, `build: ...`, `docs: ...`, `chore(workflow): ...`.
-- Keep each commit focused on one concern and include the affected area when useful.
-- PRs should summarize the behavior change, list validation commands run, and note any required image rebuilds, secret updates, or rollout steps.
-- Use screenshots only for documentation or dashboard changes; for runtime changes, include relevant command output or log snippets instead.
+Recent history uses short imperative commits, often with conventional prefixes such as `feat(job-agent): ...`, `feat(k8s): ...`, `feat(agent): ...`, `chore(k8s): ...`, and `docs: ...`. Follow that style and scope commits by center. PRs should describe the affected center, list validation commands run, mention any required Kubernetes or secret changes, and include generated YAML impacts when task assembly changes.
+
+## Security & Configuration Tips
+
+Do not commit live secrets. Use `.env.example` for local environment templates and `k8s/secret.yaml.example` for LiteLLM provider keys. `k8s/secret.yaml` and `.env` are local-only. All model access should route through LiteLLM; do not add direct provider endpoints to agent task logic.

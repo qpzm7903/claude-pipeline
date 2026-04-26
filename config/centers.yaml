@@ -1,0 +1,32 @@
+# centers.yaml — 三大中心的统一配置入口
+#
+# 由 job-agent/assemble.sh 在生成 dist/<job-name>.yml 时读取，
+# 用于把镜像、LiteLLM、K8s 默认值注入到每个 Job spec 中，
+# 避免每个 tasks/*/job.yml 重复维护这些跨任务一致的字段。
+#
+# 优先级：tasks/<name>/job.yml 显式声明 > centers.yaml > 不注入
+
+# ── 中心一：Agent 镜像 ───────────────────────────────────────────────
+# stack 名 → 镜像引用。tasks/<name>/job.yml 中
+# 写 `image: general:__from_centers__` 即按此处映射回填。
+# 直接写完整镜像地址（如 image: general-claude-pipeline:latest）则不会被覆盖。
+image:
+  general: general-claude-pipeline:latest
+  java:    java-claude-pipeline:latest
+  rust:    rust-claude-pipeline:latest
+
+# ── 中心二：LiteLLM 模型网关 ─────────────────────────────────────────
+# 注入到容器的环境变量：ANTHROPIC_BASE_URL / ANTHROPIC_API_KEY / ANTHROPIC_MODEL
+# 仅当 tasks/*/job.yml 中未显式声明对应 env 时才注入。
+litellm:
+  base_url:      http://litellm.litellm.svc.cluster.local:4000
+  secret_name:   litellm-bridge      # K8s Secret 名（同命名空间或预先复制）
+  secret_key:    ANTHROPIC_API_KEY   # Secret 中的 key 名
+  default_model: claude-sonnet-4-6   # LiteLLM 透明路由到底层 glm/deepseek/kimi
+
+# ── 中心三：K8s 默认值 ───────────────────────────────────────────────
+# tasks/*/job.yml 中可省略这些字段；显式声明会覆盖此处。
+kubernetes:
+  namespace: claude-pipeline
+  # 调度到指定节点（留空则不指定 nodeName）
+  # node: 192.168.0.219
