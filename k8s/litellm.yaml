@@ -54,24 +54,9 @@ data:
     litellm_settings:
       drop_params: true
       set_verbose: false
----
-apiVersion: v1
-kind: Secret
-metadata:
-  name: litellm-secrets
-  namespace: litellm
-type: Opaque
-stringData:
-  # 👇 在这里直接填入所有的真实 API Key（即 All In One 环境变量配置区）
-  LITELLM_MASTER_KEY: "sk-1234"
-  LITELLM_SALT_KEY: "sk-litellm-salt-key-local-dev"
-  DEEPSEEK_API_KEY: "***REVOKED-DEEPSEEK-KEY***"
-  DASHSCOPE_APPS_API_KEY: "sk-你的阿里百炼Key"
-  DASHSCOPE_API_KEY: "sk-你的通义千问Key"
-  OPENAI_API_KEY: "sk-你的OpenAI_Key"
-  ANTHROPIC_API_KEY: "sk-你的Claude_Key"
-  NEWAPI_HIZUI_API_KEY: "***REVOKED-NEWAPI-KEY***"
-  ARK_API_KEY: "***REVOKED-ARK-KEY***"
+# Secret 资源已剥离到独立文件，部署时一并 apply：
+#   kubectl apply -f k8s/litellm.yaml -f k8s/litellm-secret.yaml
+# 模板见 k8s/litellm-secret.yaml.example，真实值文件 k8s/litellm-secret.yaml 不入库。
 ---
 apiVersion: apps/v1
 kind: Deployment
