@@ -54,9 +54,9 @@ data:
     litellm_settings:
       drop_params: true
       set_verbose: false
-# Secret 资源已剥离到独立文件，部署时一并 apply：
-#   kubectl apply -f k8s/litellm.yaml -f k8s/litellm-secret.yaml
-# 模板见 k8s/litellm-secret.yaml.example，真实值文件 k8s/litellm-secret.yaml 不入库。
+# Secret（litellm-secrets）由 k8s/setup-litellm.sh 在部署时按需渲染，
+# 不在本文件维护；source 自仓库根的 .env.local（已 gitignore）。
+# 部署直接跑：bash k8s/setup-litellm.sh
 ---
 apiVersion: apps/v1
 kind: Deployment

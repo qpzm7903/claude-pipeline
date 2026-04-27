@@ -1,5 +1,7 @@
-# 敏感配置
+# 敏感配置：所有 .env / .env.* 真实文件不入库；仅 .env.*.example 模板入库
 .env
+.env.*
+!.env.*.example
 ".env copy"
 
 # 运行时产物
@@ -27,12 +29,10 @@ _bmad/
 
 # Kubernetes 机密（真实 secret 不提交）
 k8s/secret.yaml
-k8s/litellm-secret.yaml
 
 *.envdist/
 
 dist/*
-*.env
 
 dist
 job-agent/dist

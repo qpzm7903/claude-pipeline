@@ -8,18 +8,20 @@ echo ""
 
 ENV_FILE="${1:-}"
 if [[ -z "$ENV_FILE" ]]; then
-    if [[ -f "$SCRIPT_DIR/../.env.litellm" ]]; then
+    # 默认从仓库根的 .env.local 读取（被 .gitignore 拦截，不会入库）
+    if [[ -f "$SCRIPT_DIR/../.env.local" ]]; then
+        ENV_FILE="$SCRIPT_DIR/../.env.local"
+    elif [[ -f "$SCRIPT_DIR/../.env.litellm" ]]; then
+        # 兼容历史命名
         ENV_FILE="$SCRIPT_DIR/../.env.litellm"
     else
         echo "用法: $0 <env-file>"
         echo ""
-        echo "创建 .env.litellm 文件，内容示例:"
-        cat << 'EOF'
-LITELLM_MASTER_KEY=sk-your-master-key
-OPENAI_API_KEY=sk-xxx
-ANTHROPIC_API_KEY=sk-ant-xxx
-DASHSCOPE_API_KEY=sk-xxx
-EOF
+        echo "请先从模板创建机密文件："
+        echo "  cp .env.local.example .env.local"
+        echo "  vim .env.local   # 填入真实 key"
+        echo ""
+        echo "然后重新执行本脚本（会自动读取 .env.local）。"
         exit 1
     fi
 fi
@@ -109,6 +111,8 @@ kubectl create secret generic litellm-secrets \
     --namespace=litellm \
     --from-literal=LITELLM_MASTER_KEY="${LITELLM_MASTER_KEY}" \
     --from-literal=LITELLM_SALT_KEY="${LITELLM_SALT_KEY:-sk-litellm-salt-key-local-dev}" \
+    --from-literal=DEEPSEEK_API_KEY="${DEEPSEEK_API_KEY:-}" \
+    --from-literal=ARK_API_KEY="${ARK_API_KEY:-}" \
     --from-literal=DASHSCOPE_APPS_API_KEY="${DASHSCOPE_APPS_API_KEY:-}" \
     --from-literal=DASHSCOPE_API_KEY="${DASHSCOPE_API_KEY:-}" \
     --from-literal=OPENAI_API_KEY="${OPENAI_API_KEY:-}" \
