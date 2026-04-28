@@ -7,6 +7,7 @@
 #
 # assemble: run.sh=tasks/novel-lingcage/run.sh
 # assemble: prompt.md=tasks/novel-lingcage/prompt.md
+# assemble: lingcage_reference.md=tasks/novel-lingcage/lingcage_reference.md
 
 ---
 apiVersion: batch/v1
@@ -53,7 +54,7 @@ spec:
                   name: github-token
                   key: GIT_TOKEN
             - name: REPO_URL
-              value: "https://github.com/qpzm7903/novel-1"
+              value: "https://github.com/qpzm7903/novel-2"
             - name: GIT_AUTHOR_NAME
               value: "novel-bot"
             - name: GIT_AUTHOR_EMAIL
@@ -81,6 +82,9 @@ spec:
             - name: pipeline-config
               subPath: prompt.md
               mountPath: /pipeline/prompt.md
+            - name: pipeline-config
+              subPath: lingcage_reference.md
+              mountPath: /pipeline/lingcage_reference.md
       volumes:
         - name: pipeline-config
           configMap:

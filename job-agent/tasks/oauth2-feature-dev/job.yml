@@ -39,7 +39,20 @@ spec:
             - name: EXEC_MODE
               value: "iterate"
             - name: ROUND_TIMEOUT
-              value: "900"
+              value: "7200"
+            - name: FINAL_VERIFY_CMD
+              value: "mvn test"
+            - name: FINAL_VERIFY_TIMEOUT
+              value: "7200"
+            - name: ANTHROPIC_BASE_URL
+              value: "http://litellm.litellm.svc.cluster.local:4000"
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: litellm-bridge
+                  key: ANTHROPIC_API_KEY
+            - name: ANTHROPIC_MODEL
+              value: "claude-sonnet-4-6"
             - name: MAX_ITERATIONS
               value: "8"
             - name: MAX_NOCHANGE

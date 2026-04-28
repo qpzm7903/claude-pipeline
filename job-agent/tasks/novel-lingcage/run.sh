@@ -71,7 +71,7 @@ done
 
 cd "${WORKSPACE}"
 [ -f "/pipeline/prompt.md" ] && cp /pipeline/prompt.md "${WORKSPACE}/prompt.md"
-
+[ -f "/pipeline/lingcage_reference.md" ] && cp /pipeline/lingcage_reference.md "${WORKSPACE}/lingcage_reference.md"
 # ── Claude 执行工具 ─────────────────────────────────────────────────
 _run_claude() {
     local step_name="$1"
@@ -104,7 +104,7 @@ log_section "步骤 2: Multi-Agent 创作"
 
 echo "=== [Agent 1] 剧情总编剧 (Planner) ==="
 _run_claude "planner" "${PLANNER_MODEL:-${MODEL}}" \
-    "工作目录为: ${WORKSPACE}。你是【剧情总编剧】Agent。请先调用文件读取工具读取 story_summary.md、world_setting.md 以及最近的几章正文。然后结合 prompt.md 中的总体要求，在 plan.md 中深度推演并写下接下来 10 章的详细大纲（不要去写小说正文！）。" \
+    "工作目录为: ${WORKSPACE}。你是【剧情总编剧】Agent。请务必先调用文件读取工具读取 lingcage_reference.md（包含核心世界观、要求与文风）、story_summary.md、world_setting.md 以及最近的几章正文。然后结合 prompt.md 中的总体要求，在 plan.md 中深度推演并写下接下来 10 章的详细大纲（不要去写小说正文！）。" \
     "3600"
 
 echo "=== [Agent 2] 网文主笔 (Writer) ==="

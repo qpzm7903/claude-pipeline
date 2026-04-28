@@ -35,6 +35,9 @@ LOGS_DIR="${LOGS_DIR:-/workspace/logs}"
 PROMPT_FILE="${PROMPT_FILE:-/pipeline/prompt.md}"
 CLAUDE_CMD="${CLAUDE_CMD:-claude}"
 ROUND_TIMEOUT="${ROUND_TIMEOUT:-3600}"
+FINAL_VERIFY_CMD="${FINAL_VERIFY_CMD:-}"
+FINAL_VERIFY_TIMEOUT="${FINAL_VERIFY_TIMEOUT:-1800}"
+AUTO_COMMIT_REMAINING="${AUTO_COMMIT_REMAINING:-false}"
 EXEC_MODE="${EXEC_MODE:-single}"
 MAX_ITERATIONS="${MAX_ITERATIONS:-1}"
 ITER_COOLDOWN="${ITER_COOLDOWN:-15}"
@@ -59,6 +62,10 @@ log_info "Model:    ${MODEL}"
 log_info "Base URL: ${ANTHROPIC_BASE_URL:-(official)}"
 log_info "Mode:     ${EXEC_MODE}"
 log_info "Timeout:  ${ROUND_TIMEOUT}s"
+if [ -n "${FINAL_VERIFY_CMD}" ]; then
+    log_info "Verify:   ${FINAL_VERIFY_CMD} (timeout=${FINAL_VERIFY_TIMEOUT}s)"
+fi
+log_info "Auto commit remaining changes: ${AUTO_COMMIT_REMAINING}"
 log_info "Claude:   $(${CLAUDE_CMD} --version 2>/dev/null || echo 'unknown')"
 
 mkdir -pv "${WORKSPACE}" "${LOGS_DIR}"
@@ -155,6 +162,8 @@ _run_claude() {
     log_info "[${step_name}] Starting (model=${model}, timeout=${step_timeout}s)"
 
     local _exit=0
+    local -a _statuses
+    set +e
     timeout "${step_timeout}" \
         "${CLAUDE_CMD}" \
             --dangerously-skip-permissions \
@@ -163,14 +172,43 @@ _run_claude() {
             --output-format stream-json \
             --model "${model}" \
             -p "${prompt}" \
-        2>&1 | tee "${LOGS_DIR}/${step_name}_result.txt" | _fmt_stream | tee "${LOGS_DIR}/${step_name}_pretty.txt" || _exit=$?
+        2>&1 | tee "${LOGS_DIR}/${step_name}_result.txt" | _fmt_stream | tee "${LOGS_DIR}/${step_name}_pretty.txt"
+    _statuses=("${PIPESTATUS[@]}")
+    set -e
+    _exit="${_statuses[0]:-1}"
 
-    if [ "${PIPESTATUS[0]:-${_exit}}" -eq 124 ]; then
+    if [ "${_exit}" -eq 124 ]; then
         log_warning "[${step_name}] Timed out (${step_timeout}s)"
     elif [ "${_exit}" -ne 0 ]; then
         log_warning "[${step_name}] Exited with code ${_exit}"
     else
         log_info "[${step_name}] Completed"
+    fi
+
+    return "${_exit}"
+}
+
+_run_final_verify() {
+    [ -n "${FINAL_VERIFY_CMD}" ] || return 0
+
+    log_section "步骤 3: 最终验证"
+    log_info "Running: ${FINAL_VERIFY_CMD}"
+
+    local _exit=0
+    local -a _statuses
+    set +e
+    timeout "${FINAL_VERIFY_TIMEOUT}" bash -lc "${FINAL_VERIFY_CMD}" \
+        2>&1 | tee "${LOGS_DIR}/final_verify.txt"
+    _statuses=("${PIPESTATUS[@]}")
+    set -e
+    _exit="${_statuses[0]:-1}"
+
+    if [ "${_exit}" -eq 124 ]; then
+        log_error "Final verification timed out (${FINAL_VERIFY_TIMEOUT}s)"
+    elif [ "${_exit}" -ne 0 ]; then
+        log_error "Final verification failed (code=${_exit})"
+    else
+        log_info "Final verification passed"
     fi
 
     return "${_exit}"
@@ -194,7 +232,7 @@ fi
 case "${EXEC_MODE}" in
     single)
         log_info "Mode: single (one-shot)"
-        _run_claude "${_PROMPT}" "${MODEL}" "main" "${ROUND_TIMEOUT}" || true
+        _run_claude "${_PROMPT}" "${MODEL}" "main" "${ROUND_TIMEOUT}" || PIPELINE_EXIT=$?
         ;;
 
     iterate)
@@ -217,16 +255,25 @@ case "${EXEC_MODE}" in
 
             if [ "${_before}" != "${_after}" ]; then
                 log_info "Iteration #${_iter}: new commits"
-                git push 2>/dev/null || log_warning "Push failed"
+                if [ "${AUTO_COMMIT_REMAINING}" = "true" ]; then
+                    git push 2>/dev/null || log_warning "Push failed"
+                fi
                 _consecutive_fails=0
                 _consecutive_nochange=0
-            elif [ "${_exit}" -ne 0 ] && [ "${_exit}" -ne 124 ]; then
+                if [ "${_exit}" -eq 0 ]; then
+                    PIPELINE_EXIT=0
+                else
+                    PIPELINE_EXIT="${_exit}"
+                fi
+            elif [ "${_exit}" -ne 0 ]; then
                 _consecutive_fails=$((_consecutive_fails + 1))
                 log_warning "Iteration #${_iter}: failed (code=${_exit}, consecutive=${_consecutive_fails})"
+                PIPELINE_EXIT="${_exit}"
             else
                 _consecutive_nochange=$((_consecutive_nochange + 1))
                 log_info "Iteration #${_iter}: no changes (${_consecutive_nochange}/${MAX_NOCHANGE})"
                 _consecutive_fails=0
+                PIPELINE_EXIT=0
             fi
 
             [ "${_consecutive_fails}" -ge 5 ] && { log_error "5 consecutive failures"; exit 2; }
@@ -243,15 +290,45 @@ case "${EXEC_MODE}" in
         ;;
 esac
 
-# ── 步骤 3: 结果归档 ──────────────────────────────────────────────
-log_section "步骤 3: 结果归档"
+PIPELINE_EXIT="${PIPELINE_EXIT:-0}"
+_verify_exit=0
+_run_final_verify || _verify_exit=$?
+if [ "${_verify_exit}" -ne 0 ]; then
+    PIPELINE_EXIT="${_verify_exit}"
+fi
+
+# ── 步骤 4: 结果归档 ──────────────────────────────────────────────
+log_section "步骤 4: 结果归档"
 
 cd "${WORKSPACE}"
-git add -A 2>/dev/null || true
-if ! git diff-index --quiet HEAD 2>/dev/null; then
-    git commit -m "chore: agent auto-commit remaining changes" 2>/dev/null || true
+if [ "${PIPELINE_EXIT}" -eq 0 ]; then
+    if ! git diff --quiet || ! git diff --cached --quiet; then
+        if [ "${AUTO_COMMIT_REMAINING}" = "true" ]; then
+            git add -A 2>/dev/null || true
+            if ! git diff-index --quiet HEAD 2>/dev/null; then
+                git commit -m "chore: agent auto-commit remaining changes" 2>/dev/null || true
+            fi
+            git push 2>/dev/null || git push origin main 2>/dev/null || git push origin master 2>/dev/null || true
+        else
+            log_error "Uncommitted changes remain after successful verification; agent must commit/push its own work"
+            git status --short 2>/dev/null || true
+            PIPELINE_EXIT=3
+        fi
+    else
+        if [ "${AUTO_COMMIT_REMAINING}" = "true" ]; then
+            git push 2>/dev/null || git push origin main 2>/dev/null || git push origin master 2>/dev/null || true
+        elif git rev-parse --abbrev-ref --symbolic-full-name '@{u}' >/dev/null 2>&1; then
+            _unpushed_count=$(git rev-list --count '@{u}..HEAD' 2>/dev/null || echo "0")
+            if [ "${_unpushed_count}" -gt 0 ]; then
+                log_error "Local commits remain unpushed; agent must push its own work"
+                git log --oneline '@{u}..HEAD' 2>/dev/null || true
+                PIPELINE_EXIT=4
+            fi
+        fi
+    fi
+else
+    log_warning "Skipping auto-commit/push because pipeline failed (code=${PIPELINE_EXIT})"
 fi
-git push 2>/dev/null || git push origin main 2>/dev/null || git push origin master 2>/dev/null || true
 
 AFTER_COMMIT=$(git rev-parse HEAD 2>/dev/null || echo "")
 log_info "Before: ${BEFORE_COMMIT:-none}"
@@ -264,4 +341,9 @@ if [ -n "${ISC_SLEEP_TIME:-}" ]; then
     sleep "${ISC_SLEEP_TIME}s"
 fi
 
-log_section "Pipeline 完成 ✓"
+if [ "${PIPELINE_EXIT}" -eq 0 ]; then
+    log_section "Pipeline 完成 ✓"
+else
+    log_section "Pipeline 失败 ✗"
+fi
+exit "${PIPELINE_EXIT}"

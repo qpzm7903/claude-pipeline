@@ -1,8 +1,11 @@
+import os
+import re
 import sys, json
 from datetime import datetime, timezone, timedelta
 
-TEXT_LIMIT    = 500
-CONTENT_LINES = 15
+TEXT_LIMIT = int(os.getenv("FMT_STREAM_TEXT_LIMIT", "0") or "0")
+CONTENT_LINES = int(os.getenv("FMT_STREAM_CONTENT_LINES", "0") or "0")
+LINE_LIMIT = int(os.getenv("FMT_STREAM_LINE_LIMIT", "0") or "0")
 
 # Colors for terminal output
 C_THOUGHT = '\033[38;5;245m'  # Dim gray for thoughts
@@ -13,6 +16,7 @@ C_WARN    = '\033[38;5;214m'  # Orange for warnings
 C_ERR     = '\033[0;31m'      # Red for errors
 C_RESET   = '\033[0m'
 C_DIM     = '\033[2m'         # Dim filter for results
+C_MARK    = '\033[1;35m'      # Magenta for skills/subagents/parallel markers
 
 def p(s, end='\n'):
     tz = timezone(timedelta(hours=8))
@@ -21,6 +25,46 @@ def p(s, end='\n'):
         print(f"\n{C_DIM}[{ts}]{C_RESET} {s[1:]}", end=end, flush=True)
     else:
         print(f"{C_DIM}[{ts}]{C_RESET} {s}", end=end, flush=True)
+
+def limited_text(text, limit=TEXT_LIMIT):
+    if limit and len(text) > limit:
+        return text[:limit] + f" ... (truncated by FMT_STREAM_TEXT_LIMIT={limit})"
+    return text
+
+def limited_line(line):
+    if LINE_LIMIT and len(line) > LINE_LIMIT:
+        return line[:LINE_LIMIT] + f" ... (line truncated by FMT_STREAM_LINE_LIMIT={LINE_LIMIT})"
+    return line
+
+def emit_lines(lines, color=C_DIM, prefix="      │ "):
+    total = len(lines)
+    shown = lines if not CONTENT_LINES else lines[:CONTENT_LINES]
+    for ln in shown:
+        p(f"{color}{prefix}{limited_line(str(ln).rstrip())}{C_RESET}")
+    if CONTENT_LINES and total > CONTENT_LINES:
+        p(f"{color}{prefix}... ({total - CONTENT_LINES} more lines; set FMT_STREAM_CONTENT_LINES=0 for full output){C_RESET}")
+
+def skill_names_from_text(text):
+    return sorted(set(re.findall(r"(?:^|\s)/skills?\s+([A-Za-z0-9_.-]+)", text)))
+
+def tool_label(name, inp):
+    lname = name.lower()
+    if name == "Task" or "subagent" in lname or inp.get("subagent_type"):
+        agent = inp.get("subagent_type") or inp.get("agent") or inp.get("name") or "default"
+        desc = inp.get("description") or inp.get("prompt") or ""
+        first_line = str(desc).splitlines()[0] if str(desc).splitlines() else ""
+        return "subagent", f"🤖 [Subagent:{agent}] {limited_line(first_line)}"
+    if "parallel" in lname:
+        return "parallel", f"🔀 [Parallel Tool] {name}"
+    if "skill" in lname:
+        skill = inp.get("skill") or inp.get("name") or inp.get("skill_name") or ""
+        return "skill", f"🧩 [Skill] {skill or name}"
+
+    joined_input = " ".join(str(v) for v in inp.values() if isinstance(v, (str, int, float)))
+    found_skills = skill_names_from_text(joined_input)
+    if found_skills:
+        return "skill", f"🧩 [Skill Call] {', '.join(found_skills)}"
+    return "", ""
 
 def process(obj):
     t = obj.get('type', '')
@@ -53,13 +97,22 @@ def process(obj):
 
     if t == 'assistant':
         content = obj.get('message', {}).get('content', [])
+        tool_blocks = [b for b in content if isinstance(b, dict) and b.get('type') == 'tool_use']
+        if len(tool_blocks) > 1:
+            names = ", ".join(str(b.get("name", "")) for b in tool_blocks)
+            p(f"    {C_MARK}🔀 [Parallel] {len(tool_blocks)} tool calls in this assistant turn: {names}{C_RESET}")
         has_thought = False
         for block in content:
+            if not isinstance(block, dict):
+                continue
             bt = block.get('type', '')
             if bt == 'text':
                 text = block.get('text', '').strip()
                 if not text: continue
-                if len(text) > TEXT_LIMIT: text = text[:TEXT_LIMIT] + ' ... (truncated)'
+                skills = skill_names_from_text(text)
+                if skills:
+                    p(f"    {C_MARK}🧩 [Skill Mention] {', '.join(skills)}{C_RESET}")
+                text = limited_text(text)
                 if not has_thought:
                     p(f"\n{C_THOUGHT}🧠 [Thought]{C_RESET}")
                     has_thought = True
@@ -68,8 +121,13 @@ def process(obj):
             elif bt == 'tool_use':
                 name = block.get('name', '')
                 inp  = block.get('input', {})
+                kind, marker = tool_label(name, inp if isinstance(inp, dict) else {})
+                if marker:
+                    p(f"    {C_MARK}{marker}{C_RESET}")
+                    if kind in ("subagent", "parallel"):
+                        continue
                 if name == 'Bash':
-                    cmd = inp.get('command', '').replace('\n', '; ')[:120]
+                    cmd = limited_line(inp.get('command', '').replace('\n', '; '))
                     p(f"    {C_ACTION}⚡ [{name}]{C_RESET} $ {cmd}")
                 elif name == 'Read':
                     fp = inp.get('file_path', '')
@@ -84,7 +142,7 @@ def process(obj):
                 elif name in ('TodoWrite', 'TodoRead'):
                     p(f"    {C_ACTION}📋 [{name}]{C_RESET} {len(inp.get('todos', []))} tasks")
                 else:
-                    p(f"    {C_ACTION}🛠️  [{name}]{C_RESET} {str(inp)[:80]}")
+                    p(f"    {C_ACTION}🛠️  [{name}]{C_RESET} {limited_line(str(inp))}")
         return
 
     tr = obj.get('tool_use_result') or (obj if t == 'tool_result' else None)
@@ -123,38 +181,27 @@ def process(obj):
         if isinstance(tr, dict):
             if stdout:
                 lines = stdout.rstrip().splitlines()
-                for ln in lines[:CONTENT_LINES]:
-                    p(f"{C_DIM}      │ {ln.strip()[:150]}{C_RESET}")
-                if len(lines) > CONTENT_LINES:
-                    p(f"{C_DIM}      │ ... ({len(lines) - CONTENT_LINES} more lines){C_RESET}")
+                emit_lines(lines, C_DIM)
             if stderr:
                 err_color = C_ERR if is_err else C_WARN
                 lines = stderr.rstrip().splitlines()
-                for ln in lines[:CONTENT_LINES]:
-                    p(f"{err_color}      │ {ln.strip()[:150]}{C_RESET}")
-                if len(lines) > CONTENT_LINES:
-                    p(f"{err_color}      │ ... ({len(lines) - CONTENT_LINES} more lines){C_RESET}")
+                emit_lines(lines, err_color)
             if content and not stdout:
                 if isinstance(content, list):
-                    lines = [str(item)[:150] for item in content]
+                    lines = [str(item) for item in content]
                 elif isinstance(content, str):
                     lines = content.splitlines()
                 else:
                     lines = [str(content)]
-                for ln in lines[:CONTENT_LINES]:
-                    p(f"{C_DIM}      │ {ln.strip()[:150]}{C_RESET}")
-                if len(lines) > CONTENT_LINES:
-                    p(f"{C_DIM}      │ ... ({len(lines) - CONTENT_LINES} more lines){C_RESET}")
+                emit_lines(lines, C_DIM)
             if parts:
                 p(f"{C_DIM}      ╰─ {', '.join(parts)}{C_RESET}")
         elif isinstance(tr, list):
-            for item in tr[:3]:
-                p(f"{C_DIM}      │ {str(item)[:120]}{C_RESET}")
+            emit_lines([str(item) for item in tr], C_DIM)
         else:
             text = str(tr).strip()
             if text:
-                for ln in text.splitlines()[:5]:
-                    p(f"{C_DIM}      │ {ln.strip()[:150]}{C_RESET}")
+                emit_lines(text.splitlines(), C_DIM)
         return
 
     if 'content' in obj or 'tool_use_result' in obj:
@@ -162,10 +209,7 @@ def process(obj):
         content  = obj.get('content', '')
         if isinstance(content, str) and content.strip():
             lines = content.splitlines()
-            for ln in lines[:CONTENT_LINES]:
-                p(f"{C_DIM}      │ {ln.strip()[:150]}{C_RESET}")
-            if len(lines) > CONTENT_LINES:
-                p(f"{C_DIM}      │ ... ({len(lines) - CONTENT_LINES} more lines){C_RESET}")
+            emit_lines(lines, C_DIM)
         elif file_obj:
             fp  = file_obj.get('filePath', '')
             nln = file_obj.get('numLines', '?')
